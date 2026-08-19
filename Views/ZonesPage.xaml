@@ -1,0 +1,91 @@
+<Page
+    x:Class="AEPiLightingSystem.Views.ZonesPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Title="Zones"
+    d:DesignHeight="600"
+    d:DesignWidth="800"
+    Background="Transparent">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="32,24,32,24">
+
+            <TextBlock
+                Margin="0,0,0,4"
+                FontSize="28"
+                FontWeight="SemiBold"
+                Text="Zones" />
+            <TextBlock
+                Margin="0,0,0,24"
+                Opacity="0.6"
+                Text="Manage lighting per area of the house." />
+
+            <StackPanel>
+                <ui:CardExpander Margin="0,0,0,12" ContentPadding="16">
+                    <ui:CardExpander.Icon>
+                        <ui:SymbolIcon FontSize="20" Symbol="DoorArrowLeft24" />
+                    </ui:CardExpander.Icon>
+                    <ui:CardExpander.Header>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock VerticalAlignment="Center" Text="Living Room" />
+                            <ui:ToggleSwitch Grid.Column="1" IsChecked="True" />
+                        </Grid>
+                    </ui:CardExpander.Header>
+                    <StackPanel>
+                        <TextBlock Margin="0,0,0,8" Opacity="0.6" Text="Brightness" />
+                        <Slider Maximum="100" Minimum="0" Value="80" />
+                    </StackPanel>
+                </ui:CardExpander>
+
+                <ui:CardExpander Margin="0,0,0,12" ContentPadding="16">
+                    <ui:CardExpander.Icon>
+                        <ui:SymbolIcon FontSize="20" Symbol="Fireplace24" />
+                    </ui:CardExpander.Icon>
+                    <ui:CardExpander.Header>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock VerticalAlignment="Center" Text="Chapter Room" />
+                            <ui:ToggleSwitch Grid.Column="1" IsChecked="False" />
+                        </Grid>
+                    </ui:CardExpander.Header>
+                    <StackPanel>
+                        <TextBlock Margin="0,0,0,8" Opacity="0.6" Text="Brightness" />
+                        <Slider Maximum="100" Minimum="0" Value="0" />
+                    </StackPanel>
+                </ui:CardExpander>
+
+                <ui:CardExpander Margin="0,0,0,12" ContentPadding="16">
+                    <ui:CardExpander.Icon>
+                        <ui:SymbolIcon FontSize="20" Symbol="Food24" />
+                    </ui:CardExpander.Icon>
+                    <ui:CardExpander.Header>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock VerticalAlignment="Center" Text="Kitchen" />
+                            <ui:ToggleSwitch Grid.Column="1" IsChecked="True" />
+                        </Grid>
+                    </ui:CardExpander.Header>
+                    <StackPanel>
+                        <TextBlock Margin="0,0,0,8" Opacity="0.6" Text="Brightness" />
+                        <Slider Maximum="100" Minimum="0" Value="55" />
+                    </StackPanel>
+                </ui:CardExpander>
+            </StackPanel>
+
+        </StackPanel>
+    </ScrollViewer>
+</Page>
