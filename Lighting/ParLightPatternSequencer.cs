@@ -15,24 +15,40 @@ namespace AEPiLightingSystem.Lighting;
 /// The half-rig patterns (left/right, top/bottom, diagonals) alternate their
 /// two halves every beat, producing a back-and-forth chase rather than
 /// lighting the same side for the whole phrase.
+///
+/// If a beat doesn't arrive for 4+ measures at the recently observed tempo,
+/// the next hit is treated as a fresh start: back to the "All" pattern with
+/// a newly rolled color, rather than resuming wherever the phrase counter
+/// left off.
 /// </summary>
 public sealed class ParLightPatternSequencer
 {
     private const int BeatsPerPhrase = 8;
+    private const int BeatsPerMeasure = 4;
+    private const int SilenceResetMeasures = 4;
+    private const int SilenceResetBeats = BeatsPerMeasure * SilenceResetMeasures;
     private const double FlashSaturation = 0.95;
     private const double FlashLightness = 0.61;
+    private const double InitialBeatIntervalSeconds = 0.5; // ~120 BPM assumption until real beats arrive
+    private const double TempoSmoothingFactor = 0.25;
 
-    private static readonly ParLightPattern[] AllPatterns =
+    // "All" gets 35% of the roll; the other three patterns split the
+    // remaining 65% evenly.
+    private const double AllPatternWeight = 0.35;
+
+    private static readonly (ParLightPattern Pattern, double Weight)[] WeightedPatterns =
     [
-        ParLightPattern.All,
-        ParLightPattern.AlternateLeftRight,
-        ParLightPattern.AlternateTopBottom,
-        ParLightPattern.AlternateDiagonals,
+        (ParLightPattern.All, AllPatternWeight),
+        (ParLightPattern.AlternateLeftRight, (1 - AllPatternWeight) / 3),
+        (ParLightPattern.AlternateTopBottom, (1 - AllPatternWeight) / 3),
+        (ParLightPattern.AlternateDiagonals, (1 - AllPatternWeight) / 3),
     ];
 
     private readonly Random _random = new();
     private int _beatsInCurrentPhrase;
     private int _beatIndex;
+    private double _averageBeatIntervalSeconds = InitialBeatIntervalSeconds;
+    private DateTime _lastBeatTime = DateTime.MinValue;
 
     public ParLightPattern CurrentPattern { get; private set; } = ParLightPattern.All;
 
@@ -40,7 +56,12 @@ public sealed class ParLightPatternSequencer
     /// The flash color for the current phrase. Picked fresh - random hue,
     /// fixed saturation/lightness - each time the pattern changes.
     /// </summary>
-    public Color CurrentFlashColor { get; private set; } = Colors.White;
+    public Color CurrentFlashColor { get; private set; }
+
+    public ParLightPatternSequencer()
+    {
+        CurrentFlashColor = RandomFlashColor(_random);
+    }
 
     /// <summary>
     /// Call once per detected beat (bass hit). A full 8-beat phrase (two
@@ -50,6 +71,28 @@ public sealed class ParLightPatternSequencer
     /// </summary>
     public void RegisterBeat()
     {
+        var now = DateTime.UtcNow;
+
+        if (_lastBeatTime != DateTime.MinValue)
+        {
+            var gapSeconds = (now - _lastBeatTime).TotalSeconds;
+
+            if (gapSeconds > _averageBeatIntervalSeconds * SilenceResetBeats)
+            {
+                // Quiet for 4+ measures at the recent tempo - start the next
+                // hit as a fresh phrase instead of resuming where we left off.
+                _beatsInCurrentPhrase = 0;
+                CurrentPattern = ParLightPattern.All;
+                CurrentFlashColor = RandomFlashColor(_random);
+            }
+            else
+            {
+                _averageBeatIntervalSeconds += TempoSmoothingFactor * (gapSeconds - _averageBeatIntervalSeconds);
+            }
+        }
+
+        _lastBeatTime = now;
+
         _beatIndex++;
         _beatsInCurrentPhrase++;
 
@@ -58,18 +101,37 @@ public sealed class ParLightPatternSequencer
 
         _beatsInCurrentPhrase = 1;
         CurrentPattern = PickNextPattern();
-        CurrentFlashColor = HslColor.FromHsl(_random.NextDouble() * 360.0, FlashSaturation, FlashLightness);
+        CurrentFlashColor = RandomFlashColor(_random);
     }
+
+    private static Color RandomFlashColor(Random random) =>
+        HslColor.FromHsl(random.NextDouble() * 360.0, FlashSaturation, FlashLightness);
 
     private ParLightPattern PickNextPattern()
     {
         ParLightPattern next;
         do
         {
-            next = AllPatterns[_random.Next(AllPatterns.Length)];
+            next = PickWeightedPattern();
         } while (next == CurrentPattern);
 
         return next;
+    }
+
+    private ParLightPattern PickWeightedPattern()
+    {
+        var roll = _random.NextDouble();
+        var cumulative = 0.0;
+
+        foreach (var (pattern, weight) in WeightedPatterns)
+        {
+            cumulative += weight;
+            if (roll < cumulative)
+                return pattern;
+        }
+
+        // Floating-point rounding safety net; practically unreachable.
+        return WeightedPatterns[^1].Pattern;
     }
 
     /// <summary>

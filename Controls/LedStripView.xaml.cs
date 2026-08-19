@@ -45,7 +45,6 @@ public partial class LedStripView : UserControl
         if (e.NewValue is LedStrip newStrip)
         {
             newStrip.PixelsChanged += view.OnPixelsChanged;
-            view.DataContext = newStrip;
             view.InitializeBitmap(newStrip.PixelCount);
             view.Draw(newStrip);
         }
