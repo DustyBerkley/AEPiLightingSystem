@@ -10,11 +10,11 @@ none
 false
 TRACE;DEBUG;NET;NET8_0;NETCOREAPP
 C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\App.xaml
-41400987323
+2-1023206918
 
-71495121951
+9-772231462
 200896162620
-MainWindow.xaml;Views\HomePage.xaml;Views\SettingsPage.xaml;Views\ZonesPage.xaml;
+Controls\LedStripView.xaml;MainWindow.xaml;
 
 False
 

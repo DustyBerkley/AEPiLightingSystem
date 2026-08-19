@@ -1,10 +1,4 @@
 C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows\AEPiLightingSystem.csproj.AssemblyReference.cache
-C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows\Views\HomePage.baml
-C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows\Views\SettingsPage.baml
-C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows\Views\ZonesPage.baml
-C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows\Views\HomePage.g.cs
-C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows\Views\SettingsPage.g.cs
-C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows\Views\ZonesPage.g.cs
 C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows\App.g.cs
 C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows\AEPiLightingSystem_MarkupCompile.cache
 C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows\AEPiLightingSystem_MarkupCompile.lref
@@ -30,3 +24,5 @@ C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-window
 C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows\AEPiLightingSystem.pdb
 C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows\AEPiLightingSystem.genruntimeconfig.cache
 C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows\ref\AEPiLightingSystem.dll
+C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows\Controls\LedStripView.baml
+C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows\Controls\LedStripView.g.cs
