@@ -12,7 +12,8 @@ namespace AEPiLightingSystem.Audio;
 public sealed class AdaptiveOnsetDetector
 {
     private readonly double _minimumEnergyThreshold;
-    private readonly double _averageTimeConstantSeconds;
+    private readonly double _averageRiseTimeConstantSeconds;
+    private readonly double _averageFallTimeConstantSeconds;
     private readonly double _refractoryPeriodSeconds;
 
     private double _averageEnergy;
@@ -24,11 +25,13 @@ public sealed class AdaptiveOnsetDetector
 
     public AdaptiveOnsetDetector(
         double minimumEnergyThreshold,
-        double averageTimeConstantSeconds = 1.0,
+        double averageRiseTimeConstantSeconds = 2.5,
+        double averageFallTimeConstantSeconds = 0.15,
         double refractoryPeriodSeconds = 0.12)
     {
         _minimumEnergyThreshold = minimumEnergyThreshold;
-        _averageTimeConstantSeconds = averageTimeConstantSeconds;
+        _averageRiseTimeConstantSeconds = averageRiseTimeConstantSeconds;
+        _averageFallTimeConstantSeconds = averageFallTimeConstantSeconds;
         _refractoryPeriodSeconds = refractoryPeriodSeconds;
     }
 
@@ -37,7 +40,18 @@ public sealed class AdaptiveOnsetDetector
     {
         LastEnergy = instantEnergy;
 
-        var k = 1.0 - Math.Exp(-bufferSeconds / _averageTimeConstantSeconds);
+        // Rise slowly but fall quickly: a loud hit should barely drag the
+        // average up, but the average should snap back down to the quiet
+        // floor between hits. With a single symmetric time constant, sustained
+        // playing (a steady bassline that never fully goes quiet) creeps the
+        // average up toward the peak level itself over time, so hits stop
+        // clearing the adaptive threshold - the detector quietly quenches
+        // itself the longer music keeps playing. Asymmetric tracking keeps
+        // headroom between the floor and the peaks indefinitely.
+        var timeConstant = instantEnergy > _averageEnergy
+            ? _averageRiseTimeConstantSeconds
+            : _averageFallTimeConstantSeconds;
+        var k = 1.0 - Math.Exp(-bufferSeconds / timeConstant);
         _averageEnergy += k * (instantEnergy - _averageEnergy);
         _averageEnergySquared += k * (instantEnergy * instantEnergy - _averageEnergySquared);
 

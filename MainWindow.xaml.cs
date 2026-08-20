@@ -2,6 +2,7 @@ using System;
 using System.Windows;
 using System.Windows.Media;
 using AEPiLightingSystem.Audio;
+using AEPiLightingSystem.Dmx;
 using AEPiLightingSystem.Lighting;
 using AEPiLightingSystem.Models;
 using Wpf.Ui.Appearance;
@@ -19,11 +20,17 @@ public partial class MainWindow : FluentWindow
     private readonly AudioCaptureService _audioCapture = new();
     private readonly ParLightFlashAnimator _parFlashAnimator;
     private readonly LedStripFlashAnimator _stripFlashAnimator;
+    private readonly LedStripLavaLampAnimator _lavaLampAnimator;
     private readonly ParLightPatternSequencer _patternSequencer = new();
     private readonly BasslineActivityTracker _basslineTracker = new();
+    private readonly MelodicPassageDetector _melodicPassageDetector = new();
+    private readonly DmxUniverse _dmxUniverse = new();
+    private readonly DmxOutputService _dmxOutput;
+    private readonly ParLightDmxBinder _dmxBinder;
     private BassOnsetDetector? _bassOnsetDetector;
     private ImpactDetector? _impactDetector;
     private DateTime _lastRigFlashTime = DateTime.MinValue;
+    private bool _wasMelodicPassageActive;
 
     public LightingRig Rig { get; } = new();
 
@@ -43,6 +50,11 @@ public partial class MainWindow : FluentWindow
 
         _parFlashAnimator = new ParLightFlashAnimator(Rig.ParLights, decaySeconds: 0.22);
         _stripFlashAnimator = new LedStripFlashAnimator(Rig.LedStrips, decaySeconds: 0.35);
+        _lavaLampAnimator = new LedStripLavaLampAnimator(Rig.LedStrips);
+
+        _dmxOutput = new DmxOutputService(_dmxUniverse);
+        _dmxOutput.ConnectionLost += (_, ex) => Dispatcher.BeginInvoke(() => OnDmxConnectionLost(ex));
+        _dmxBinder = new ParLightDmxBinder(Rig, _dmxUniverse);
 
         // All fixtures default to off; nothing lights up until an effect fires.
         foreach (var strip in Rig.LedStrips)
@@ -50,6 +62,53 @@ public partial class MainWindow : FluentWindow
 
         Loaded += (_, _) => StartListening();
         Closed += (_, _) => _audioCapture.Dispose();
+        Closed += (_, _) => _dmxOutput.Dispose();
+    }
+
+    private void DmxPortComboBox_DropDownOpened(object sender, EventArgs e)
+    {
+        var selected = DmxPortComboBox.SelectedItem as string;
+
+        DmxPortComboBox.ItemsSource = DmxOutputService.GetAvailablePorts();
+
+        if (selected is not null && DmxPortComboBox.Items.Contains(selected))
+            DmxPortComboBox.SelectedItem = selected;
+        else if (DmxPortComboBox.Items.Count > 0)
+            DmxPortComboBox.SelectedIndex = 0;
+    }
+
+    private void DmxConnectButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_dmxOutput.IsConnected)
+        {
+            _dmxOutput.Disconnect();
+            DmxConnectButton.Content = "Connect";
+            DmxStatusText.Text = "Not connected";
+            return;
+        }
+
+        if (DmxPortComboBox.SelectedItem is not string portName)
+        {
+            DmxStatusText.Text = "Select a port first";
+            return;
+        }
+
+        try
+        {
+            _dmxOutput.Connect(portName);
+            DmxConnectButton.Content = "Disconnect";
+            DmxStatusText.Text = $"Connected on {portName}";
+        }
+        catch (Exception ex)
+        {
+            DmxStatusText.Text = $"Failed: {ex.Message}";
+        }
+    }
+
+    private void OnDmxConnectionLost(Exception ex)
+    {
+        DmxConnectButton.Content = "Connect";
+        DmxStatusText.Text = $"Disconnected: {ex.Message}";
     }
 
     /// <summary>
@@ -79,6 +138,15 @@ public partial class MainWindow : FluentWindow
 
         _impactDetector ??= CreateImpactDetector(e.SampleRate);
         _impactDetector.Process(e.Samples);
+
+        _melodicPassageDetector.Process(e.Samples, e.SampleRate, _basslineTracker.IsActive);
+
+        var wantsLavaLamp = _melodicPassageDetector.IsActive;
+        if (wantsLavaLamp != _wasMelodicPassageActive)
+        {
+            _wasMelodicPassageActive = wantsLavaLamp;
+            Dispatcher.BeginInvoke(() => _lavaLampAnimator.SetActive(wantsLavaLamp));
+        }
     }
 
     private BassOnsetDetector CreateBassOnsetDetector(int sampleRate)
@@ -91,7 +159,7 @@ public partial class MainWindow : FluentWindow
     private ImpactDetector CreateImpactDetector(int sampleRate)
     {
         var detector = new ImpactDetector(sampleRate);
-        detector.ImpactDetected += (_, _) => Dispatcher.BeginInvoke(OnImpact);
+        detector.ImpactDetected += (_, args) => Dispatcher.BeginInvoke(() => OnImpact(args.IsExtreme));
         return detector;
     }
 
@@ -127,13 +195,17 @@ public partial class MainWindow : FluentWindow
 
     /// <summary>
     /// A sudden, dramatically loud broadband moment (crash, big isolated hit,
-    /// drop). Only makes the whole rig flash white when there's no steady
-    /// bassline already going - during a groove, the regular per-beat
-    /// flashing already has it covered - and only once per such moment: a
-    /// cooldown stops the first few hits of a bassline spinning up from each
-    /// re-triggering their own whole-rig flash.
+    /// drop). Only fires when there's no steady bassline already going -
+    /// during a groove, the regular per-beat flashing already has it covered
+    /// - and only once per such moment: a cooldown stops the first few hits
+    /// of a bassline spinning up from each re-triggering their own flash.
+    /// All 4 par lights always flash white. The LED strips only get the full
+    /// whole-strip white flash for a genuinely extreme moment (abnormally
+    /// quiet for the preceding few seconds, then suddenly loud - a real
+    /// drop); otherwise just the far left and right strips flash, so the
+    /// full-strip flash stays reserved for the biggest moments.
     /// </summary>
-    private void OnImpact()
+    private void OnImpact(bool isExtreme)
     {
         if (_basslineTracker.IsActive)
             return;
@@ -146,6 +218,16 @@ public partial class MainWindow : FluentWindow
         // Totally overwrite whatever the par lights/strips were doing.
         _parFlashAnimator.FlashColor = Colors.White;
         _parFlashAnimator.FlashAll();
-        _stripFlashAnimator.FlashAll();
+
+        _stripFlashAnimator.FlashColor = Colors.White;
+        if (isExtreme)
+        {
+            _stripFlashAnimator.FlashAll();
+        }
+        else
+        {
+            var strips = Rig.LedStrips;
+            _stripFlashAnimator.Flash(new[] { strips[0], strips[^1] });
+        }
     }
 }

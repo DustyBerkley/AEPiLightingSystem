@@ -36,16 +36,24 @@
             <Setter Property="Fill" Value="{Binding Color, Converter={StaticResource ColorToBrushConverter}}" />
             <Setter Property="Stroke" Value="{Binding Color, Converter={StaticResource ColorToBrushConverter}, ConverterParameter=0.5}" />
         </Style>
+
+        <!--  Floor par lights sit below the wall ones and read as smaller/closer in the layout.  -->
+        <Style x:Key="ParHexagonStyleSmall" BasedOn="{StaticResource ParHexagonStyle}" TargetType="Polygon">
+            <Setter Property="Width" Value="66" />
+            <Setter Property="Height" Value="57" />
+            <Setter Property="StrokeThickness" Value="11" />
+        </Style>
     </Window.Resources>
 
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
         <Image
-            Grid.RowSpan="2"
+            Grid.RowSpan="3"
             IsHitTestVisible="False"
             Opacity="0.035"
             Source="pack://application:,,,/Assets/background_texture.png"
@@ -57,7 +65,37 @@
             </ui:TitleBar.Icon>
         </ui:TitleBar>
 
-        <Viewbox Grid.Row="1" Margin="24" Stretch="Uniform">
+        <!--  DMX connection bar  -->
+        <StackPanel
+            Grid.Row="1"
+            Margin="24,4,24,8"
+            HorizontalAlignment="Right"
+            Orientation="Horizontal">
+            <TextBlock
+                Margin="0,0,10,0"
+                VerticalAlignment="Center"
+                FontSize="12"
+                Foreground="#AAFFFFFF"
+                Text="DMX port:" />
+            <ComboBox
+                x:Name="DmxPortComboBox"
+                Width="140"
+                DropDownOpened="DmxPortComboBox_DropDownOpened" />
+            <ui:Button
+                x:Name="DmxConnectButton"
+                Margin="10,0,0,0"
+                Content="Connect"
+                Click="DmxConnectButton_Click" />
+            <TextBlock
+                x:Name="DmxStatusText"
+                Margin="10,0,0,0"
+                VerticalAlignment="Center"
+                FontSize="12"
+                Foreground="#AAFFFFFF"
+                Text="Not connected" />
+        </StackPanel>
+
+        <Viewbox Grid.Row="2" Margin="24" Stretch="Uniform">
             <Grid Width="1200" Height="650">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -74,24 +112,49 @@
 
                     <StackPanel HorizontalAlignment="Center" Orientation="Horizontal">
                         <Polygon
-                            Margin="0,0,26,0"
+                            Margin="0,0,50,0"
                             DataContext="{Binding TopLeftPar}"
                             Style="{StaticResource ParHexagonStyle}" />
                         <Polygon
-                            Margin="26,0,0,0"
+                            Margin="50,0,0,0"
                             DataContext="{Binding TopRightPar}"
                             Style="{StaticResource ParHexagonStyle}" />
                     </StackPanel>
 
-                    <StackPanel HorizontalAlignment="Center" Margin="0,36,0,0" Orientation="Horizontal">
+                    <StackPanel HorizontalAlignment="Center" Margin="0,14,0,0" Orientation="Horizontal">
                         <Polygon
-                            Margin="0,0,50,0"
+                            Margin="0,0,14,0"
                             DataContext="{Binding BottomLeftPar}"
                             Style="{StaticResource ParHexagonStyle}" />
                         <Polygon
-                            Margin="50,0,0,0"
+                            Margin="14,0,0,0"
                             DataContext="{Binding BottomRightPar}"
                             Style="{StaticResource ParHexagonStyle}" />
+                    </StackPanel>
+
+                    <!--  Floor par lights - smaller, arranged in a square below the wall pair.  -->
+                    <StackPanel HorizontalAlignment="Center" Margin="0,50,0,0">
+                        <StackPanel HorizontalAlignment="Center" Orientation="Horizontal">
+                            <Polygon
+                                Margin="0,0,20,0"
+                                DataContext="{Binding FloorTopLeftPar}"
+                                Style="{StaticResource ParHexagonStyleSmall}" />
+                            <Polygon
+                                Margin="20,0,0,0"
+                                DataContext="{Binding FloorTopRightPar}"
+                                Style="{StaticResource ParHexagonStyleSmall}" />
+                        </StackPanel>
+
+                        <StackPanel HorizontalAlignment="Center" Margin="0,20,0,0" Orientation="Horizontal">
+                            <Polygon
+                                Margin="0,0,20,0"
+                                DataContext="{Binding FloorBottomLeftPar}"
+                                Style="{StaticResource ParHexagonStyleSmall}" />
+                            <Polygon
+                                Margin="20,0,0,0"
+                                DataContext="{Binding FloorBottomRightPar}"
+                                Style="{StaticResource ParHexagonStyleSmall}" />
+                        </StackPanel>
                     </StackPanel>
                 </StackPanel>
 

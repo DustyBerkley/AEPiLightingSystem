@@ -28,9 +28,15 @@ public sealed class LedStripFlashAnimator
         _decaySeconds = decaySeconds;
     }
 
-    public void FlashAll()
+    public void FlashAll() => Flash(_strips);
+
+    /// <summary>
+    /// Flashes only the given subset of strips (the rest are left alone -
+    /// still decaying toward black if they were already mid-flash).
+    /// </summary>
+    public void Flash(IEnumerable<LedStrip> strips)
     {
-        foreach (var strip in _strips)
+        foreach (var strip in strips)
         {
             Array.Fill(strip.Pixels, FlashColor);
             strip.RaisePixelsChanged();
