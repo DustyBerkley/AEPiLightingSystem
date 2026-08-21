@@ -149,6 +149,24 @@ public sealed class LedStripLavaLampAnimator
     private readonly SmoothNoise _hueNoise;
     private readonly SmoothNoise _boundaryJitterNoise;
 
+    /// <summary>
+    /// Multiplies every lit pixel's lightness - intended to follow the
+    /// music's current volume (see EffectBrightnessTracker) so the effect
+    /// breathes with the track rather than sitting at one fixed brightness.
+    /// Defaults to 1.0 (no change) so the animator behaves exactly as
+    /// before if nothing ever sets it.
+    /// </summary>
+    public double BrightnessFactor { get; set; } = 1.0;
+
+    /// <summary>
+    /// Multiplies how fast the animator's internal clock advances -
+    /// intended to follow the music's current energy (see
+    /// EffectSpeedTracker) so blobs breathe/drift faster during energetic
+    /// passages and slower during calm ones. Defaults to 1.0 (no change) so
+    /// the animator behaves exactly as before if nothing ever sets it.
+    /// </summary>
+    public double SpeedFactor { get; set; } = 1.0;
+
     private double _time;
     private double _targetIntensity;
     private double _currentIntensity;
@@ -233,7 +251,7 @@ public sealed class LedStripLavaLampAnimator
         var dt = (now - _lastFrameTime).TotalSeconds;
         _lastFrameTime = now;
 
-        _time += dt;
+        _time += dt * SpeedFactor;
 
         var intensityStep = dt / IntensityFadeSeconds;
         if (_currentIntensity < _targetIntensity)
@@ -291,7 +309,7 @@ public sealed class LedStripLavaLampAnimator
                         // so it touches black with no visible seam.
                         var t = distance / radius;
                         var falloff = 0.5 * (1.0 + Math.Cos(Math.PI * t));
-                        var lightness = falloff * LightnessCap;
+                        var lightness = falloff * LightnessCap * BrightnessFactor;
 
                         raw[i] = HslColor.FromHsl(hue, FlashSaturation, lightness);
                     }

@@ -54,6 +54,13 @@ public sealed class MelodicPassageDetector
 
     public bool IsActive { get; private set; }
 
+    /// <summary>
+    /// Smoothed RMS of the high-passed (mid/high) band - the arpeggio/vocal
+    /// content's current loudness, exposed for effects that should track it
+    /// (e.g. brightness following the volume of the mid arpeggios).
+    /// </summary>
+    public double MidHighLevel => _smoothedMidHighRms;
+
     public void Process(float[] samples, int sampleRate, bool basslineActive)
     {
         if (samples.Length == 0)

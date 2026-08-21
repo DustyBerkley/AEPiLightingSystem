@@ -17,6 +17,12 @@ public sealed class BassOnsetDetector
     // audible, prominent kick/sub - not just technically present.
     private const double MinimumBassRms = 0.1; // 10^(-20/20)
 
+    // Time constant for the smoothed bass-band RMS below - separate from
+    // AdaptiveOnsetDetector's internal averaging, which rises slowly/falls
+    // quickly to track a hit-detection threshold rather than a steady
+    // "how loud is the bassline right now" reading.
+    private const double LevelSmoothingSeconds = 0.25;
+
     private readonly int _sampleRate;
     private readonly AdaptiveOnsetDetector _onset = new(MinimumBassRms * MinimumBassRms);
     private double _filterState1;
@@ -26,6 +32,13 @@ public sealed class BassOnsetDetector
 
     /// <summary>Most recent instantaneous bass-band energy, exposed for diagnostics/metering.</summary>
     public double LastEnergy => _onset.LastEnergy;
+
+    /// <summary>
+    /// Smoothed RMS of the bass band - the bassline's current loudness,
+    /// exposed for effects that should track it (e.g. brightness following
+    /// the volume of the bassline, a little).
+    /// </summary>
+    public double SmoothedLevel { get; private set; }
 
     public BassOnsetDetector(int sampleRate)
     {
@@ -50,6 +63,9 @@ public sealed class BassOnsetDetector
 
         var instantEnergy = sumSquares / samples.Length;
         var bufferSeconds = (double)samples.Length / _sampleRate;
+
+        var levelSmoothing = 1.0 - Math.Exp(-bufferSeconds / LevelSmoothingSeconds);
+        SmoothedLevel += levelSmoothing * (Math.Sqrt(instantEnergy) - SmoothedLevel);
 
         if (_onset.ProcessEnergy(instantEnergy, bufferSeconds))
             BassHitDetected?.Invoke(this, EventArgs.Empty);

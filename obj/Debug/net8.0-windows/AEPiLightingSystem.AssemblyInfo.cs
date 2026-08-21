@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("AEPiLightingSystem")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+76e73d67ce1d39a32cd2169b44bf43b848883735")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+28782fd27c5fd00c7565cda1da754c8998207244")]
 [assembly: System.Reflection.AssemblyProductAttribute("AEPiLightingSystem")]
 [assembly: System.Reflection.AssemblyTitleAttribute("AEPiLightingSystem")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

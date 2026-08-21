@@ -12,9 +12,9 @@ namespace AEPiLightingSystem.Lighting;
 /// flash. Because the phrase length is fixed at 8 beats, changes always
 /// land on standard musical boundaries (8, 16, 24, 32, ...).
 ///
-/// The half-rig patterns (left/right, top/bottom, diagonals) alternate their
-/// two halves every beat, producing a back-and-forth chase rather than
-/// lighting the same side for the whole phrase.
+/// The half-rig patterns (top/bottom, diagonals) alternate their two halves
+/// every beat, producing a back-and-forth chase rather than lighting the
+/// same side for the whole phrase.
 ///
 /// If a beat doesn't arrive for 4+ measures at the recently observed tempo,
 /// the next hit is treated as a fresh start: back to the "All" pattern with
@@ -32,16 +32,15 @@ public sealed class ParLightPatternSequencer
     private const double InitialBeatIntervalSeconds = 0.5; // ~120 BPM assumption until real beats arrive
     private const double TempoSmoothingFactor = 0.25;
 
-    // "All" gets 35% of the roll; the other three patterns split the
+    // "All" gets 35% of the roll; the other two patterns split the
     // remaining 65% evenly.
     private const double AllPatternWeight = 0.35;
 
     private static readonly (ParLightPattern Pattern, double Weight)[] WeightedPatterns =
     [
         (ParLightPattern.All, AllPatternWeight),
-        (ParLightPattern.AlternateLeftRight, (1 - AllPatternWeight) / 3),
-        (ParLightPattern.AlternateTopBottom, (1 - AllPatternWeight) / 3),
-        (ParLightPattern.AlternateDiagonals, (1 - AllPatternWeight) / 3),
+        (ParLightPattern.AlternateTopBottom, (1 - AllPatternWeight) / 2),
+        (ParLightPattern.AlternateDiagonals, (1 - AllPatternWeight) / 2),
     ];
 
     private readonly Random _random = new();
@@ -144,16 +143,13 @@ public sealed class ParLightPatternSequencer
 
         return CurrentPattern switch
         {
-            ParLightPattern.AlternateLeftRight => isEvenBeat
-                ? [rig.TopLeftPar, rig.BottomLeftPar]
-                : [rig.TopRightPar, rig.BottomRightPar],
             ParLightPattern.AlternateTopBottom => isEvenBeat
                 ? [rig.TopLeftPar, rig.TopRightPar]
                 : [rig.BottomLeftPar, rig.BottomRightPar],
             ParLightPattern.AlternateDiagonals => isEvenBeat
                 ? [rig.TopLeftPar, rig.BottomRightPar]
                 : [rig.TopRightPar, rig.BottomLeftPar],
-            _ => rig.ParLights,
+            _ => rig.WallParLights,
         };
     }
 }

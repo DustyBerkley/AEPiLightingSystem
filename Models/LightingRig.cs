@@ -19,9 +19,17 @@ public class LightingRig
     public ParLight FloorBottomLeftPar { get; }
     public ParLight FloorBottomRightPar { get; }
 
-    public ReadOnlyCollection<ParLight> ParLights { get; }
+    // Wall and floor par lights are animated entirely independently - the
+    // wall 4 get every beat/impact-driven flash effect, the floor 4 get
+    // their own separate ambient behavior - so each group has its own
+    // collection rather than one combined list.
+    public ReadOnlyCollection<ParLight> WallParLights { get; }
+
+    public ReadOnlyCollection<ParLight> FloorParLights { get; }
 
     public ReadOnlyCollection<LedStrip> LedStrips { get; }
+
+    public LaserFixture Laser { get; } = new();
 
     public LightingRig()
     {
@@ -35,9 +43,13 @@ public class LightingRig
         FloorBottomLeftPar = new ParLight(7, "Par 7 - Floor Bottom Left");
         FloorBottomRightPar = new ParLight(8, "Par 8 - Floor Bottom Right");
 
-        ParLights = new ReadOnlyCollection<ParLight>(new[]
+        WallParLights = new ReadOnlyCollection<ParLight>(new[]
         {
             TopLeftPar, TopRightPar, BottomLeftPar, BottomRightPar,
+        });
+
+        FloorParLights = new ReadOnlyCollection<ParLight>(new[]
+        {
             FloorTopLeftPar, FloorTopRightPar, FloorBottomLeftPar, FloorBottomRightPar,
         });
 

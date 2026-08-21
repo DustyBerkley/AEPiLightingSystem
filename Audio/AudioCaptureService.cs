@@ -1,12 +1,13 @@
 using System;
+using System.Linq;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 
 namespace AEPiLightingSystem.Audio;
 
 /// <summary>
-/// Captures whatever audio is currently playing out of the default output
-/// device (WASAPI loopback) and raises mono sample buffers for analysis.
+/// Captures whatever audio is currently playing out of the actual physical
+/// speakers (WASAPI loopback) and raises mono sample buffers for analysis.
 /// </summary>
 public sealed class AudioCaptureService : IDisposable
 {
@@ -27,12 +28,17 @@ public sealed class AudioCaptureService : IDisposable
 
     public bool IsCapturing => _capture is not null;
 
+    /// <summary>The device currently being captured from, once started - shown in the UI so a mismatch is diagnosable at a glance.</summary>
+    public MMDevice? CurrentDevice { get; private set; }
+
     public void Start()
     {
         if (_capture is not null)
             return;
 
-        _capture = new WasapiLoopbackCapture();
+        var device = FindPreferredDevice();
+
+        _capture = new WasapiLoopbackCapture(device);
         _capture.DataAvailable += OnDataAvailable;
         _capture.RecordingStopped += OnRecordingStopped;
 
@@ -43,11 +49,34 @@ public sealed class AudioCaptureService : IDisposable
         _keepAliveOutput?.Stop();
         _keepAliveOutput?.Dispose();
 
-        _keepAliveOutput = new WasapiOut(AudioClientShareMode.Shared, true, 200);
+        _keepAliveOutput = new WasapiOut(device, AudioClientShareMode.Shared, true, 200);
         _keepAliveOutput.Init(new SilenceProvider(_capture.WaveFormat));
         _keepAliveOutput.Play();
 
         _capture.StartRecording();
+        CurrentDevice = device;
+    }
+
+    /// <summary>
+    /// Picks the device to capture from. Deliberately does not just trust
+    /// Windows' "default" playback device - a DJ audio interface (or
+    /// similar) commonly claims default-device status the moment it's
+    /// connected, even when the DJ software actually sends its audio out
+    /// through that hardware's own ASIO driver, which bypasses Windows'
+    /// audio engine entirely and never appears as loopback-visible data on
+    /// that WASAPI endpoint. The physical speakers - whatever is actually
+    /// audible - are what should be captured, so a device literally named
+    /// "Speakers" is preferred outright over trusting default status.
+    /// </summary>
+    private static MMDevice FindPreferredDevice()
+    {
+        using var enumerator = new MMDeviceEnumerator();
+        var devices = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active);
+
+        var speakerDevice = devices.FirstOrDefault(
+            d => d.FriendlyName.Contains("Speaker", StringComparison.OrdinalIgnoreCase));
+
+        return speakerDevice ?? enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
     }
 
     public void Stop()
@@ -56,6 +85,7 @@ public sealed class AudioCaptureService : IDisposable
         _keepAliveOutput?.Stop();
         _keepAliveOutput?.Dispose();
         _keepAliveOutput = null;
+        CurrentDevice = null;
     }
 
     private void OnDataAvailable(object? sender, WaveInEventArgs e)
@@ -109,32 +139,119 @@ public sealed class AudioCaptureService : IDisposable
         }
     }
 
+    private static bool _loggedUnsupportedFormat;
+
     private static float[] ConvertToMonoFloat(byte[] buffer, int bytesRecorded, WaveFormat format)
     {
-        // WASAPI loopback on modern Windows delivers 32-bit IEEE float.
-        if (format.Encoding != WaveFormatEncoding.IeeeFloat || format.BitsPerSample != 32)
-            return Array.Empty<float>();
+        // Onboard audio (Realtek etc.) almost always exposes a 32-bit IEEE
+        // float shared-mode mix format, but that's not universal - many pro
+        // audio interfaces (DJ controllers/mixers among them) expose 16- or
+        // 24-bit integer PCM instead. This used to just silently return an
+        // empty array for anything but float, with no indication to the
+        // user at all - "device selected correctly, meter never moves" is
+        // exactly what that looks like.
+        //
+        // Multi-channel/pro devices commonly report WaveFormatExtensible
+        // rather than a plain WaveFormat - the real sample type there is in
+        // SubFormat, not BitsPerSample/Encoding on the wrapper itself, so
+        // guessing float vs PCM from just the bit depth would silently
+        // guess wrong for exactly this kind of hardware.
+        var encoding = format.Encoding;
+        if (format is WaveFormatExtensible extensible)
+        {
+            if (extensible.SubFormat == NAudio.Dmo.AudioMediaSubtypes.MEDIASUBTYPE_IEEE_FLOAT)
+                encoding = WaveFormatEncoding.IeeeFloat;
+            else if (extensible.SubFormat == NAudio.Dmo.AudioMediaSubtypes.MEDIASUBTYPE_PCM)
+                encoding = WaveFormatEncoding.Pcm;
+        }
 
-        var floatCount = bytesRecorded / 4;
-        var floatBuffer = new float[floatCount];
-        Buffer.BlockCopy(buffer, 0, floatBuffer, 0, bytesRecorded);
+        // Couldn't positively identify the sub-format (either this wasn't
+        // actually a WaveFormatExtensible instance despite reporting
+        // Extensible, or its SubFormat GUID wasn't one of the two checked
+        // above) - 32-bit float is what every device that reaches this path
+        // used to be assumed to be, before sub-format detection existed, and
+        // that assumption was correct often enough that guessing "unsupported"
+        // instead regressed normal playback capture entirely.
+        if (encoding == WaveFormatEncoding.Extensible && format.BitsPerSample == 32)
+            encoding = WaveFormatEncoding.IeeeFloat;
+
+        var interleaved = encoding switch
+        {
+            WaveFormatEncoding.IeeeFloat when format.BitsPerSample == 32 => ReadFloat32(buffer, bytesRecorded),
+            WaveFormatEncoding.Pcm when format.BitsPerSample == 16 => ReadPcm16(buffer, bytesRecorded),
+            WaveFormatEncoding.Pcm when format.BitsPerSample == 24 => ReadPcm24(buffer, bytesRecorded),
+            WaveFormatEncoding.Pcm when format.BitsPerSample == 32 => ReadPcm32(buffer, bytesRecorded),
+            _ => null,
+        };
+
+        if (interleaved is null)
+        {
+            if (!_loggedUnsupportedFormat)
+            {
+                _loggedUnsupportedFormat = true;
+                System.Diagnostics.Debug.WriteLine(
+                    $"Unsupported capture format: {encoding} ({format.Encoding} wrapper), {format.BitsPerSample}-bit - no samples will be processed.");
+            }
+
+            return Array.Empty<float>();
+        }
 
         if (format.Channels <= 1)
-            return floatBuffer;
+            return interleaved;
 
         var channels = format.Channels;
-        var mono = new float[floatCount / channels];
+        var mono = new float[interleaved.Length / channels];
 
         for (var i = 0; i < mono.Length; i++)
         {
             float sum = 0;
             for (var ch = 0; ch < channels; ch++)
-                sum += floatBuffer[i * channels + ch];
+                sum += interleaved[i * channels + ch];
 
             mono[i] = sum / channels;
         }
 
         return mono;
+    }
+
+    private static float[] ReadFloat32(byte[] buffer, int bytesRecorded)
+    {
+        var floatBuffer = new float[bytesRecorded / 4];
+        Buffer.BlockCopy(buffer, 0, floatBuffer, 0, bytesRecorded);
+        return floatBuffer;
+    }
+
+    private static float[] ReadPcm16(byte[] buffer, int bytesRecorded)
+    {
+        var count = bytesRecorded / 2;
+        var result = new float[count];
+        for (var i = 0; i < count; i++)
+            result[i] = BitConverter.ToInt16(buffer, i * 2) / 32768f;
+        return result;
+    }
+
+    private static float[] ReadPcm24(byte[] buffer, int bytesRecorded)
+    {
+        var count = bytesRecorded / 3;
+        var result = new float[count];
+        for (var i = 0; i < count; i++)
+        {
+            var offset = i * 3;
+            var sample = buffer[offset] | (buffer[offset + 1] << 8) | (buffer[offset + 2] << 16);
+            if ((sample & 0x800000) != 0)
+                sample |= unchecked((int)0xFF000000); // sign-extend
+            result[i] = sample / 8388608f;
+        }
+        return result;
+    }
+
+    private static float[] ReadPcm32(byte[] buffer, int bytesRecorded)
+    {
+        var count = bytesRecorded / 4;
+        var result = new float[count];
+        for (var i = 0; i < count; i++)
+            result[i] = BitConverter.ToInt32(buffer, i * 4) / 2147483648f;
+        return result;
     }
 
     public void Dispose() => Stop();

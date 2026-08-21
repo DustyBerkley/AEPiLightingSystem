@@ -8,7 +8,6 @@ namespace AEPiLightingSystem.Lighting;
 public enum ParLightPattern
 {
     All,
-    AlternateLeftRight,
     AlternateTopBottom,
     AlternateDiagonals,
 }

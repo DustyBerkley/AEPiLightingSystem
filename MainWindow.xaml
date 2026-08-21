@@ -49,11 +49,12 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
         <Image
-            Grid.RowSpan="3"
+            Grid.RowSpan="4"
             IsHitTestVisible="False"
             Opacity="0.035"
             Source="pack://application:,,,/Assets/background_texture.png"
@@ -65,9 +66,28 @@
             </ui:TitleBar.Icon>
         </ui:TitleBar>
 
-        <!--  DMX connection bar  -->
+        <!--  Audio capture status - read-only; the device itself is chosen automatically  -->
         <StackPanel
             Grid.Row="1"
+            Margin="24,4,24,4"
+            HorizontalAlignment="Right"
+            Orientation="Horizontal">
+            <TextBlock
+                VerticalAlignment="Center"
+                FontSize="12"
+                Foreground="#AAFFFFFF"
+                Text="Audio: " />
+            <TextBlock
+                x:Name="AudioDeviceStatusText"
+                VerticalAlignment="Center"
+                FontSize="12"
+                Foreground="#AAFFFFFF"
+                Text="Not listening" />
+        </StackPanel>
+
+        <!--  DMX connection bar  -->
+        <StackPanel
+            Grid.Row="2"
             Margin="24,4,24,8"
             HorizontalAlignment="Right"
             Orientation="Horizontal">
@@ -95,7 +115,7 @@
                 Text="Not connected" />
         </StackPanel>
 
-        <Viewbox Grid.Row="2" Margin="24" Stretch="Uniform">
+        <Viewbox Grid.Row="3" Margin="24" Stretch="Uniform">
             <Grid Width="1200" Height="650">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -164,19 +184,28 @@
                     Margin="24,140"
                     Background="#22FFFFFF" />
 
-                <!--  LED strips  -->
+                <!--  Laser (above) + LED strips (below)  -->
                 <StackPanel
                     Grid.Column="2"
                     Margin="70,0,0,0"
                     HorizontalAlignment="Left"
-                    VerticalAlignment="Center"
-                    Orientation="Horizontal">
-                    <controls:LedStripView Width="12" Height="340" Margin="18,0" Strip="{Binding LedStrips[0]}" />
-                    <controls:LedStripView Width="12" Height="340" Margin="18,0" Strip="{Binding LedStrips[1]}" />
-                    <controls:LedStripView Width="12" Height="340" Margin="18,0" Strip="{Binding LedStrips[2]}" />
-                    <controls:LedStripView Width="12" Height="340" Margin="18,0" Strip="{Binding LedStrips[3]}" />
-                    <controls:LedStripView Width="12" Height="340" Margin="18,0" Strip="{Binding LedStrips[4]}" />
-                    <controls:LedStripView Width="12" Height="340" Margin="18,0" Strip="{Binding LedStrips[5]}" />
+                    VerticalAlignment="Center">
+
+                    <!--  Laser - visualization only for now, no DMX output wired up yet  -->
+                    <controls:LaserPanelView
+                        Width="360"
+                        Height="150"
+                        Margin="0,0,0,28"
+                        Laser="{Binding Laser}" />
+
+                    <StackPanel Orientation="Horizontal">
+                        <controls:LedStripView Width="12" Height="340" Margin="18,0" Strip="{Binding LedStrips[0]}" />
+                        <controls:LedStripView Width="12" Height="340" Margin="18,0" Strip="{Binding LedStrips[1]}" />
+                        <controls:LedStripView Width="12" Height="340" Margin="18,0" Strip="{Binding LedStrips[2]}" />
+                        <controls:LedStripView Width="12" Height="340" Margin="18,0" Strip="{Binding LedStrips[3]}" />
+                        <controls:LedStripView Width="12" Height="340" Margin="18,0" Strip="{Binding LedStrips[4]}" />
+                        <controls:LedStripView Width="12" Height="340" Margin="18,0" Strip="{Binding LedStrips[5]}" />
+                    </StackPanel>
                 </StackPanel>
             </Grid>
         </Viewbox>
