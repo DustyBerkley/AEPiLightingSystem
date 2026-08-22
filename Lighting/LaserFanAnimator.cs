@@ -48,6 +48,13 @@ namespace AEPiLightingSystem.Lighting;
 /// freshly-picked random position/color, held static (no wander, no falloff)
 /// until the next chord hit or until chord mode ends via
 /// <see cref="SetChordMode"/>.
+///
+/// Whatever's computed above (wave field or chord beam) is a per-frame
+/// *target*, not what's actually shown - <see cref="OnRendering"/> eases
+/// each beam's displayed color/tilt toward that target rather than snapping
+/// straight to it, so switching between the wandering fan and a chord hit
+/// (or between one chord hit and the next) crossfades smoothly instead of
+/// cutting.
 /// </summary>
 public sealed class LaserFanAnimator
 {
@@ -98,10 +105,16 @@ public sealed class LaserFanAnimator
     private const double FlashSaturation = 0.95;
     private const double LightnessCap = 0.5;
 
-    // A group's vertical tilt, in radians either side of dead ahead -
-    // enough to clearly read as the beams panning up/down without tilting
-    // so far the fan looks broken apart.
-    private const double MaxTiltRadians = 0.22;
+    // A group's vertical tilt, in radians either side of dead ahead - kept
+    // fairly narrow so the beams stay close to the horizontal plane in
+    // front of the fixture rather than swinging widely up/down.
+    private const double MaxTiltRadians = 0.10;
+
+    // How long each beam's displayed color/tilt takes to ease toward
+    // whatever's newly computed each frame - what makes switching between
+    // the wandering fan and a chord hit (or one chord hit and the next)
+    // read as a crossfade instead of a cut.
+    private const double DisplayFadeSeconds = 0.4;
 
     /// <summary>
     /// Multiplies every lit beam's lightness - intended to follow the
@@ -134,6 +147,11 @@ public sealed class LaserFanAnimator
     private readonly SineNoise _tiltNoise;
     private readonly double[] _brightness = new double[LaserFixture.BeamCount];
     private readonly double[] _tilt = new double[LaserFixture.BeamCount];
+
+    // What's actually shown, eased toward the per-frame target computed
+    // above rather than snapping to it - see DisplayFadeSeconds.
+    private readonly Color[] _displayColor = new Color[LaserFixture.BeamCount];
+    private readonly double[] _displayTilt = new double[LaserFixture.BeamCount];
 
     private double _time;
     private double _targetIntensity;
@@ -278,6 +296,31 @@ public sealed class LaserFanAnimator
             }
         }
 
+        // Every beam's displayed color/tilt eases toward this frame's
+        // target rather than snapping to it - the same fade rate regardless
+        // of what changed (blob movement, a chord hit, a mode switch), so
+        // all of those read as one consistent smooth transition.
+        var fadeAlpha = 1.0 - Math.Exp(-dt / DisplayFadeSeconds);
+
+        var displayIsBlack = true;
+
+        void EaseBeam(int index, Color targetColor, double targetTilt)
+        {
+            var current = _displayColor[index];
+            _displayColor[index] = Color.FromRgb(
+                (byte)(current.R + (targetColor.R - current.R) * fadeAlpha),
+                (byte)(current.G + (targetColor.G - current.G) * fadeAlpha),
+                (byte)(current.B + (targetColor.B - current.B) * fadeAlpha));
+            _displayTilt[index] += fadeAlpha * (targetTilt - _displayTilt[index]);
+
+            _laser.BeamColors[index] = _displayColor[index];
+            _laser.BeamTiltRadians[index] = _displayTilt[index];
+
+            var c = _displayColor[index];
+            if (c.R != 0 || c.G != 0 || c.B != 0)
+                displayIsBlack = false;
+        }
+
         for (var i = 0; i <= domainEnd; i++)
         {
             var hue = _chordMode
@@ -286,28 +329,31 @@ public sealed class LaserFanAnimator
             var lightness = _brightness[i] * LightnessCap * _currentIntensity * BrightnessFactor;
             var color = lightness <= 0.001 ? Colors.Black : HslColor.FromHsl(hue, FlashSaturation, lightness);
 
-            _laser.BeamColors[i] = color;
-            _laser.BeamTiltRadians[i] = _tilt[i];
+            EaseBeam(i, color, _tilt[i]);
 
             var mirrorIndex = beamCount - 1 - i;
             if (mirrorIndex != i)
             {
-                _laser.BeamColors[mirrorIndex] = color;
-
-                // Negated, not copied straight across: the right side's
-                // beam vector points the opposite horizontal direction from
-                // the left's, so rotating it by the same signed angle would
-                // send it the opposite way vertically (left panning up,
-                // right panning down). Flipping the sign here is what makes
-                // both sides pan up/down together instead of in mirrored
-                // opposition.
-                _laser.BeamTiltRadians[mirrorIndex] = -_tilt[i];
+                // Tilt is negated, not copied straight across: the right
+                // side's beam vector points the opposite horizontal
+                // direction from the left's, so rotating it by the same
+                // signed angle would send it the opposite way vertically
+                // (left panning up, right panning down). Flipping the sign
+                // here is what makes both sides pan up/down together
+                // instead of in mirrored opposition.
+                EaseBeam(mirrorIndex, color, -_tilt[i]);
             }
         }
 
         _laser.RaiseBeamsChanged();
 
-        if (_currentIntensity <= 0.0005 && _targetIntensity <= 0.0005)
+        // Stopping as soon as _currentIntensity bottoms out isn't enough on
+        // its own - the *displayed* color lags behind via the crossfade
+        // above and can still be a faint non-black residue at that exact
+        // moment, which would otherwise freeze in place as a leftover line
+        // the instant rendering stops. Waiting for the display to have
+        // actually reached black is what avoids that.
+        if (_currentIntensity <= 0.0005 && _targetIntensity <= 0.0005 && displayIsBlack)
         {
             CompositionTarget.Rendering -= OnRendering;
             _isRunning = false;

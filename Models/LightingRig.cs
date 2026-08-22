@@ -31,6 +31,8 @@ public class LightingRig
 
     public LaserFixture Laser { get; } = new();
 
+    public WallStripLight WallStripLight { get; } = new();
+
     public LightingRig()
     {
         TopLeftPar = new ParLight(1, "Par 1 - Wall Top Left");

@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Windows;
 using System.Windows.Media;
 using AEPiLightingSystem.Audio;
@@ -19,6 +20,8 @@ public partial class MainWindow : FluentWindow
 
     private readonly AudioCaptureService _audioCapture = new();
     private readonly ParLightFlashAnimator _parFlashAnimator;
+    private readonly ParLightFlashAnimator _wallStripFlashAnimator;
+    private readonly WallStripLightRotationAnimator _wallStripRotationAnimator;
     private readonly LedStripFlashAnimator _stripFlashAnimator;
     private readonly LedStripLavaLampAnimator _lavaLampAnimator;
     private readonly LaserFanAnimator _laserAnimator;
@@ -31,15 +34,21 @@ public partial class MainWindow : FluentWindow
     private readonly EffectSpeedTracker _effectSpeed = new();
     private readonly ChordSustainDetector _chordSustainDetector = new();
 
-    // Split top/bottom so an extremely fast buildup can alternate between
-    // them instead of always flashing all 4 floor lights together - the two
-    // stay in sync (SetActive, and Flash() together) for every other case.
-    private readonly ParLightAmbientAnimator _floorTopAmbientAnimator;
-    private readonly ParLightAmbientAnimator _floorBottomAmbientAnimator;
+    // Individual per-light rather than grouped so OnBassHit can flash just
+    // the specific floor light(s) that map onto whichever wall par
+    // grouping is currently active (including diagonal pairs, which cut
+    // across a simple top/bottom split) - every other case (ambient
+    // SetActive, whole-rig Flash()) just calls all 4 together.
+    private readonly ParLightAmbientAnimator _floorTopLeftAmbientAnimator;
+    private readonly ParLightAmbientAnimator _floorTopRightAmbientAnimator;
+    private readonly ParLightAmbientAnimator _floorBottomLeftAmbientAnimator;
+    private readonly ParLightAmbientAnimator _floorBottomRightAmbientAnimator;
 
     private readonly DmxUniverse _dmxUniverse = new();
     private readonly DmxOutputService _dmxOutput;
     private readonly ParLightDmxBinder _dmxBinder;
+    private readonly WallStripLightDmxBinder _wallStripDmxBinder;
+    private readonly LaserDmxBinder _laserDmxBinder;
     private BassOnsetDetector? _bassOnsetDetector;
     private ImpactDetector? _impactDetector;
     private PercussionBuildupDetector? _percussionBuildupDetector;
@@ -66,9 +75,16 @@ public partial class MainWindow : FluentWindow
         DataContext = Rig;
 
         _parFlashAnimator = new ParLightFlashAnimator(Rig.WallParLights, decaySeconds: 0.22);
+        _wallStripFlashAnimator = new ParLightFlashAnimator(Rig.WallStripLight.Lights, decaySeconds: 0.22);
+        _wallStripRotationAnimator = new WallStripLightRotationAnimator(Rig.WallStripLight);
         _stripFlashAnimator = new LedStripFlashAnimator(Rig.LedStrips, decaySeconds: 0.35);
         _lavaLampAnimator = new LedStripLavaLampAnimator(Rig.LedStrips);
         _laserAnimator = new LaserFanAnimator(Rig.Laser);
+
+        // TEMP: forcing the laser's wave effect permanently on for testing
+        // the reduced tilt range - see the matching note further down where
+        // the per-buffer toggle is also forced to true. Remove both when done.
+        _laserAnimator.SetActive(true);
 
         // A chord hit only means anything visually if the melodic passage
         // has actually settled into "one sustained chord" by the time it
@@ -80,18 +96,23 @@ public partial class MainWindow : FluentWindow
                 _laserAnimator.TriggerChordHit();
         };
 
-        _floorTopAmbientAnimator = new ParLightAmbientAnimator(new[] { Rig.FloorTopLeftPar, Rig.FloorTopRightPar });
-        _floorBottomAmbientAnimator = new ParLightAmbientAnimator(new[] { Rig.FloorBottomLeftPar, Rig.FloorBottomRightPar });
+        _floorTopLeftAmbientAnimator = new ParLightAmbientAnimator(new[] { Rig.FloorTopLeftPar });
+        _floorTopRightAmbientAnimator = new ParLightAmbientAnimator(new[] { Rig.FloorTopRightPar });
+        _floorBottomLeftAmbientAnimator = new ParLightAmbientAnimator(new[] { Rig.FloorBottomLeftPar });
+        _floorBottomRightAmbientAnimator = new ParLightAmbientAnimator(new[] { Rig.FloorBottomRightPar });
 
         _dmxOutput = new DmxOutputService(_dmxUniverse);
         _dmxOutput.ConnectionLost += (_, ex) => Dispatcher.BeginInvoke(() => OnDmxConnectionLost(ex));
         _dmxBinder = new ParLightDmxBinder(Rig, _dmxUniverse);
+        _wallStripDmxBinder = new WallStripLightDmxBinder(Rig.WallStripLight, _dmxUniverse, baseChannel: 91);
+        _laserDmxBinder = new LaserDmxBinder(Rig.Laser, _dmxUniverse, baseChannel: 14);
 
         // All fixtures default to off; nothing lights up until an effect fires.
         foreach (var strip in Rig.LedStrips)
             strip.Fill(Colors.Black);
 
         Loaded += (_, _) => StartListening();
+        Loaded += (_, _) => TryAutoConnectDmx();
         Closed += (_, _) => _audioCapture.Dispose();
         Closed += (_, _) => _dmxOutput.Dispose();
     }
@@ -106,6 +127,24 @@ public partial class MainWindow : FluentWindow
             DmxPortComboBox.SelectedItem = selected;
         else if (DmxPortComboBox.Items.Count > 0)
             DmxPortComboBox.SelectedIndex = 0;
+    }
+
+    // Runs once on startup: if exactly the kind of dongle this app expects
+    // (an FTDI-based Open DMX USB interface) is already plugged in, connect
+    // to it without making the user pick it from the dropdown and click
+    // Connect every time. Silent on failure/absence - this is a convenience
+    // for the common case, not a requirement, and the dropdown/button are
+    // still there for picking a specific device or reconnecting by hand.
+    private void TryAutoConnectDmx()
+    {
+        var ports = DmxOutputService.GetAvailablePorts();
+        DmxPortComboBox.ItemsSource = ports;
+
+        if (ports.Length == 0)
+            return;
+
+        DmxPortComboBox.SelectedIndex = 0;
+        ConnectDmx(ports[0]);
     }
 
     private void DmxConnectButton_Click(object sender, RoutedEventArgs e)
@@ -124,6 +163,11 @@ public partial class MainWindow : FluentWindow
             return;
         }
 
+        ConnectDmx(portName);
+    }
+
+    private void ConnectDmx(string portName)
+    {
         try
         {
             _dmxOutput.Connect(portName);
@@ -133,6 +177,15 @@ public partial class MainWindow : FluentWindow
         catch (Exception ex)
         {
             DmxStatusText.Text = $"Failed: {ex.Message}";
+        }
+    }
+
+    private static void FlashFloorLights(Color color, params ParLightAmbientAnimator[] animators)
+    {
+        foreach (var animator in animators)
+        {
+            animator.FlashColor = color;
+            animator.Flash();
         }
     }
 
@@ -226,7 +279,12 @@ public partial class MainWindow : FluentWindow
             Dispatcher.BeginInvoke(() =>
             {
                 _lavaLampAnimator.SetActive(wantsLavaLamp);
-                _laserAnimator.SetActive(wantsLavaLamp);
+
+                // TEMP: forcing the laser's wave effect permanently on for
+                // testing the reduced tilt range, instead of only while a
+                // melodic passage is detected. Revert to
+                // _laserAnimator.SetActive(wantsLavaLamp) afterward.
+                _laserAnimator.SetActive(true);
             });
         }
 
@@ -244,8 +302,10 @@ public partial class MainWindow : FluentWindow
             _wasLoud = isLoud;
             Dispatcher.BeginInvoke(() =>
             {
-                _floorTopAmbientAnimator.SetActive(isLoud);
-                _floorBottomAmbientAnimator.SetActive(isLoud);
+                _floorTopLeftAmbientAnimator.SetActive(isLoud);
+                _floorTopRightAmbientAnimator.SetActive(isLoud);
+                _floorBottomLeftAmbientAnimator.SetActive(isLoud);
+                _floorBottomRightAmbientAnimator.SetActive(isLoud);
             });
         }
     }
@@ -273,8 +333,14 @@ public partial class MainWindow : FluentWindow
 
             Dispatcher.BeginInvoke(() =>
             {
-                _floorTopAmbientAnimator.Flash(decaySeconds);
-                _floorBottomAmbientAnimator.Flash(decaySeconds);
+                _floorTopLeftAmbientAnimator.FlashColor = Colors.White;
+                _floorTopRightAmbientAnimator.FlashColor = Colors.White;
+                _floorBottomLeftAmbientAnimator.FlashColor = Colors.White;
+                _floorBottomRightAmbientAnimator.FlashColor = Colors.White;
+                _floorTopLeftAmbientAnimator.Flash(decaySeconds);
+                _floorTopRightAmbientAnimator.Flash(decaySeconds);
+                _floorBottomLeftAmbientAnimator.Flash(decaySeconds);
+                _floorBottomRightAmbientAnimator.Flash(decaySeconds);
             });
         };
         return detector;
@@ -309,6 +375,31 @@ public partial class MainWindow : FluentWindow
     /// active-light pattern every 8 beats) and flashes whichever par lights
     /// the current pattern selects. Also feeds the bassline tracker so it
     /// knows whether a steady groove is currently going.
+    ///
+    /// The wall striplight (a Rockville Motionstrip 80W) rides along with
+    /// this same rotation rather than having its own logic: its head faces
+    /// forward for the All pattern and down for AlternateTopBottom, and it
+    /// only actually flashes for All or for AlternateTopBottom's top half -
+    /// never for the bottom half or for AlternateDiagonals, matching how a
+    /// physical moving head mounted with the wall pars would only make
+    /// sense to fire when aimed at a par grouping it's actually part of.
+    ///
+    /// The floor par lights echo the same rotation too, each with a plain
+    /// white <see cref="ParLightAmbientAnimator.Flash"/> spiking over their
+    /// own ambient baseline: the bottom 2 for the All pattern, the top 2 for
+    /// AlternateTopBottom whenever the wall's bottom pair is the active
+    /// half (not the top half - the wall striplight already covers that
+    /// case), and whichever diagonal pair mirrors the wall's currently-lit
+    /// diagonal for AlternateDiagonals.
+    ///
+    /// The real fixture takes real time to physically rotate, so its facing
+    /// isn't just set reactively for whatever pattern is active right now -
+    /// on the last beat of a phrase, <see cref="ParLightPatternSequencer.UpcomingPattern"/>
+    /// already knows what the next phrase's pattern will be, and the facing
+    /// is pushed toward whatever that pattern needs immediately (right as
+    /// this, the previous, beat finishes), rather than waiting for the next
+    /// phrase's first beat to actually arrive. That's the whole gap between
+    /// two beats to get there instead of zero.
     /// </summary>
     private void OnBassHit()
     {
@@ -320,8 +411,53 @@ public partial class MainWindow : FluentWindow
         if (justHadRigFlash)
             return;
 
+        var activeWallLights = _patternSequencer.GetActiveLights(Rig);
         _parFlashAnimator.FlashColor = _patternSequencer.CurrentFlashColor;
-        _parFlashAnimator.Flash(_patternSequencer.GetActiveLights(Rig));
+        _parFlashAnimator.Flash(activeWallLights);
+
+        var pattern = _patternSequencer.CurrentPattern;
+
+        if (pattern == ParLightPattern.All)
+            Rig.WallStripLight.FacingAngleDegrees = WallStripLight.ForwardAngleDegrees;
+        else if (pattern == ParLightPattern.AlternateTopBottom)
+            Rig.WallStripLight.FacingAngleDegrees = WallStripLight.DownAngleDegrees;
+
+        var wallStripShouldFire = pattern == ParLightPattern.All
+            || (pattern == ParLightPattern.AlternateTopBottom && _patternSequencer.LastActiveWasTop);
+
+        if (wallStripShouldFire)
+        {
+            _wallStripFlashAnimator.FlashColor = _patternSequencer.CurrentFlashColor;
+            _wallStripFlashAnimator.FlashAll();
+        }
+
+        // Floor par lights echo whichever wall par grouping is currently
+        // lit, each with a flash in the same color as the wall pars'
+        // current bass-hit flash, spiking over its own ambient baseline
+        // (Flash() always decays back to that baseline, not to black)
+        // rather than following independent logic of their own.
+        if (pattern == ParLightPattern.All)
+        {
+            FlashFloorLights(_patternSequencer.CurrentFlashColor, _floorBottomLeftAmbientAnimator, _floorBottomRightAmbientAnimator);
+        }
+        else if (pattern == ParLightPattern.AlternateTopBottom && activeWallLights.Contains(Rig.BottomLeftPar))
+        {
+            FlashFloorLights(_patternSequencer.CurrentFlashColor, _floorTopLeftAmbientAnimator, _floorTopRightAmbientAnimator);
+        }
+        else if (pattern == ParLightPattern.AlternateDiagonals)
+        {
+            if (activeWallLights.Contains(Rig.TopLeftPar))
+                FlashFloorLights(_patternSequencer.CurrentFlashColor, _floorTopLeftAmbientAnimator, _floorBottomRightAmbientAnimator);
+            else
+                FlashFloorLights(_patternSequencer.CurrentFlashColor, _floorTopRightAmbientAnimator, _floorBottomLeftAmbientAnimator);
+        }
+
+        // Known a beat early - see the method summary - so start moving now
+        // rather than waiting for the upcoming pattern's own first beat.
+        if (_patternSequencer.UpcomingPattern == ParLightPattern.All)
+            Rig.WallStripLight.FacingAngleDegrees = WallStripLight.ForwardAngleDegrees;
+        else if (_patternSequencer.UpcomingPattern == ParLightPattern.AlternateTopBottom)
+            Rig.WallStripLight.FacingAngleDegrees = WallStripLight.DownAngleDegrees;
     }
 
     /// <summary>
@@ -349,8 +485,14 @@ public partial class MainWindow : FluentWindow
 
         // Floor par lights flash on every rig-flash moment, spiking over
         // whatever their ambient baseline currently is.
-        _floorTopAmbientAnimator.Flash();
-        _floorBottomAmbientAnimator.Flash();
+        _floorTopLeftAmbientAnimator.FlashColor = Colors.White;
+        _floorTopRightAmbientAnimator.FlashColor = Colors.White;
+        _floorBottomLeftAmbientAnimator.FlashColor = Colors.White;
+        _floorBottomRightAmbientAnimator.FlashColor = Colors.White;
+        _floorTopLeftAmbientAnimator.Flash();
+        _floorTopRightAmbientAnimator.Flash();
+        _floorBottomLeftAmbientAnimator.Flash();
+        _floorBottomRightAmbientAnimator.Flash();
 
         _stripFlashAnimator.FlashColor = Colors.White;
         if (isExtreme)

@@ -22,12 +22,19 @@ public sealed class ParLightDmxBinder
     private const int AutoProgramOffset = 5;
     private const int ProgramSpeedOffset = 6;
 
+    // Matches the physical address dials set on the 4 real floor par
+    // fixtures.
+    private const int TopLeftBaseChannel = 63;
+    private const int BottomLeftBaseChannel = 70;
+    private const int BottomRightBaseChannel = 77;
+    private const int TopRightBaseChannel = 84;
+
     public ParLightDmxBinder(LightingRig rig, DmxUniverse universe)
     {
-        Bind(rig.TopRightPar, 1, universe);
-        Bind(rig.BottomRightPar, 8, universe);
-        Bind(rig.BottomLeftPar, 15, universe);
-        Bind(rig.TopLeftPar, 22, universe);
+        Bind(rig.FloorTopLeftPar, TopLeftBaseChannel, universe);
+        Bind(rig.FloorBottomLeftPar, BottomLeftBaseChannel, universe);
+        Bind(rig.FloorBottomRightPar, BottomRightBaseChannel, universe);
+        Bind(rig.FloorTopRightPar, TopRightBaseChannel, universe);
     }
 
     private static void Bind(ParLight light, int baseChannel, DmxUniverse universe)

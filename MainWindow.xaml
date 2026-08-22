@@ -130,6 +130,45 @@
                     HorizontalAlignment="Right"
                     VerticalAlignment="Center">
 
+                    <!--  Wall striplight (Rockville Motionstrip 80W) - sits above the wall pars. The arrow shows which way the head is currently facing: 0deg points right (forward), 90deg points down.  -->
+                    <StackPanel
+                        Margin="0,0,0,24"
+                        HorizontalAlignment="Center"
+                        Orientation="Horizontal">
+                        <Path
+                            Width="16"
+                            Height="16"
+                            Margin="0,0,10,0"
+                            VerticalAlignment="Center"
+                            Data="M 0,0 L 16,8 L 0,16 Z"
+                            DataContext="{Binding WallStripLight}"
+                            Fill="#AAFFFFFF">
+                            <Path.RenderTransform>
+                                <RotateTransform Angle="{Binding DisplayFacingAngleDegrees}" CenterX="8" CenterY="8" />
+                            </Path.RenderTransform>
+                        </Path>
+                        <ItemsControl ItemsSource="{Binding WallStripLight.Lights}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Rectangle
+                                        Width="18"
+                                        Height="30"
+                                        Margin="2,0"
+                                        Fill="{Binding Color, Converter={StaticResource ColorToBrushConverter}}"
+                                        RadiusX="2"
+                                        RadiusY="2"
+                                        Stroke="{Binding Color, Converter={StaticResource ColorToBrushConverter}, ConverterParameter=0.5}"
+                                        StrokeThickness="1.5" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+
                     <StackPanel HorizontalAlignment="Center" Orientation="Horizontal">
                         <Polygon
                             Margin="0,0,50,0"

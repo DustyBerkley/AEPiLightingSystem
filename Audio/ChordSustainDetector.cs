@@ -26,12 +26,21 @@ namespace AEPiLightingSystem.Audio;
 /// separate them cleanly is raw size: real chord hits measured roughly
 /// double the gap magnitude of anything in the background cluster. Hence
 /// <see cref="SharpGapMinimum"/> - a second, much higher bar on top of the
-/// adaptive one - and once something clears it, <see cref="IsSustainedChord"/>
-/// stays true (further hits just refresh it and re-fire
-/// <see cref="ChordOnset"/>) until nothing sharp arrives for
-/// <see cref="StaleAfterSeconds"/>, i.e. until the progression has audibly
-/// faded into just the background texture (or the melodic passage itself
-/// ends, e.g. a bassline starting).
+/// adaptive one.
+///
+/// Clearing that bar once still isn't enough to commit to - a single loud
+/// spike could be one stray transient rather than an actual chord
+/// progression starting, and a false positive here means the laser jumping
+/// into single-beam chord mode over nothing. <see cref="RequiredConfirmingHits"/>
+/// hits, each landing within <see cref="StaleAfterSeconds"/> of the last,
+/// are required before <see cref="IsSustainedChord"/> actually goes true and
+/// <see cref="ChordOnset"/> fires for the first time - i.e. the *second*
+/// sharp hit is what confirms the first one was real, not a one-off. From
+/// there every further hit within that window both refreshes the sustain
+/// and re-fires ChordOnset, and it all ends - IsSustainedChord drops back to
+/// false - once nothing sharp arrives for StaleAfterSeconds (the
+/// progression has audibly faded into just the background texture) or the
+/// melodic passage itself ends (e.g. a bassline starting).
 /// </summary>
 public sealed class ChordSustainDetector
 {
@@ -65,22 +74,28 @@ public sealed class ChordSustainDetector
     // The real chord-vs-background discriminator. Measured against a real
     // reference track: background melodic texture's own attacks landed
     // roughly 0.06-0.14 in this detector's gap units, while genuine sharp
-    // chord hits landed at 0.25+ - comfortably more than double. Sitting
-    // this partway between the two (rather than right at the background
-    // ceiling) leaves margin for a track that's a little busier/noisier
-    // than the one this was tuned against.
-    private const double SharpGapMinimum = 0.19;
+    // chord hits landed at 0.25+ - comfortably more than double. Sits close
+    // to the real chord hits on purpose (less sensitive, fewer false
+    // positives, more time spent in the normal fan wave), at some cost to
+    // catching a quieter-than-usual chord on a different track.
+    private const double SharpGapMinimum = 0.24;
 
     // Just long enough that one attack's own multi-hop gap pulse can't
     // register as two hits.
     private const double OnsetRefractorySeconds = 0.15;
 
-    // How long a sustained-chord state survives with no further sharp hit -
-    // long enough to span the pause between individual chords in the same
-    // progression (measured around 3-4.5s apart on the reference track),
-    // short enough to actually end once the progression has genuinely faded
-    // into background texture rather than lingering indefinitely.
-    private const double StaleAfterSeconds = 6.0;
+    // How many sharp hits in a row (each within StaleAfterSeconds of the
+    // last) it takes to actually commit to "yes, a chord progression is
+    // happening" - see the confirmation reasoning in the class summary.
+    private const int RequiredConfirmingHits = 2;
+
+    // How long a sustained-chord state (confirmed or still building
+    // confirmation) survives with no further sharp hit - long enough to
+    // span the pause between individual chords in the same progression
+    // (measured around 3-4.5s apart on the reference track), but trimmed
+    // down from an earlier 6.0 so a progression that's trailing off hands
+    // back to the normal fan wave sooner rather than lingering in chord mode.
+    private const double StaleAfterSeconds = 5.0;
 
     private readonly float[] _ringBuffer = new float[FftSize];
     private readonly float[] _referenceMagnitudes = new float[FftSize / 2];
@@ -94,11 +109,12 @@ public sealed class ChordSustainDetector
     private DateTime _lastOnsetTime = DateTime.MinValue;
     private DateTime _lastSharpHitTime = DateTime.MinValue;
     private bool _armedForNextOnset = true;
+    private int _consecutiveSharpHits;
 
-    /// <summary>Fires each time a sharp chord hit is detected while the melodic passage is active.</summary>
+    /// <summary>Fires each time a confirmed chord hit is detected while the melodic passage is active.</summary>
     public event EventHandler? ChordOnset;
 
-    /// <summary>True from a sharp chord hit until none arrive for <see cref="StaleAfterSeconds"/> or the melodic passage ends.</summary>
+    /// <summary>True once <see cref="RequiredConfirmingHits"/> sharp hits in a row have confirmed a chord progression, until none arrive for <see cref="StaleAfterSeconds"/> or the melodic passage ends.</summary>
     public bool IsSustainedChord { get; private set; }
 
     public void Process(float[] samples, int sampleRate, bool melodicPassageActive)
@@ -117,7 +133,10 @@ public sealed class ChordSustainDetector
         }
 
         if (!melodicPassageActive)
+        {
             IsSustainedChord = false;
+            _consecutiveSharpHits = 0;
+        }
     }
 
     private void ProcessHop(int sampleRate, bool melodicPassageActive)
@@ -179,13 +198,28 @@ public sealed class ChordSustainDetector
 
             if (gap > SharpGapMinimum)
             {
+                // A hit that lands well after the last sharp one starts a
+                // fresh confirmation count rather than continuing the old
+                // one - it needs its own second hit to prove it's a real
+                // progression, not just ride on a stale streak's coattails.
+                var continuesStreak = _lastSharpHitTime != DateTime.MinValue
+                    && (now - _lastSharpHitTime).TotalSeconds <= StaleAfterSeconds;
+
+                _consecutiveSharpHits = continuesStreak ? _consecutiveSharpHits + 1 : 1;
                 _lastSharpHitTime = now;
-                IsSustainedChord = true;
-                ChordOnset?.Invoke(this, EventArgs.Empty);
+
+                if (_consecutiveSharpHits >= RequiredConfirmingHits)
+                {
+                    IsSustainedChord = true;
+                    ChordOnset?.Invoke(this, EventArgs.Empty);
+                }
             }
         }
 
-        if (IsSustainedChord && (now - _lastSharpHitTime).TotalSeconds > StaleAfterSeconds)
+        if (_lastSharpHitTime != DateTime.MinValue && (now - _lastSharpHitTime).TotalSeconds > StaleAfterSeconds)
+        {
             IsSustainedChord = false;
+            _consecutiveSharpHits = 0;
+        }
     }
 }
