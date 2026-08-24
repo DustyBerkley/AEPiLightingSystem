@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Windows;
 using System.Windows.Media;
+using System.Windows.Threading;
 using AEPiLightingSystem.Audio;
 using AEPiLightingSystem.Dmx;
 using AEPiLightingSystem.Lighting;
@@ -49,6 +50,11 @@ public partial class MainWindow : FluentWindow
     private readonly ParLightDmxBinder _dmxBinder;
     private readonly WallStripLightDmxBinder _wallStripDmxBinder;
     private readonly LaserDmxBinder _laserDmxBinder;
+
+    // Live mirror of the center 700x150px of the middle monitor (Rekordbox,
+    // fullscreen) - see ScreenMirrorCapture for the monitor/region math.
+    private readonly ScreenMirrorCapture _screenMirrorCapture = new();
+    private readonly DispatcherTimer _screenMirrorTimer = new() { Interval = TimeSpan.FromMilliseconds(100) };
     private BassOnsetDetector? _bassOnsetDetector;
     private ImpactDetector? _impactDetector;
     private PercussionBuildupDetector? _percussionBuildupDetector;
@@ -63,6 +69,12 @@ public partial class MainWindow : FluentWindow
     public MainWindow()
     {
         InitializeComponent();
+
+        // Has to wait for the window's actual Win32 handle to exist -
+        // setting Left/Top any earlier (e.g. directly here in the
+        // constructor) doesn't reliably influence which monitor
+        // WindowState.Maximized resolves to.
+        SourceInitialized += (_, _) => PositionFullScreenOnLeftmostMonitor();
 
         ApplicationThemeManager.Apply(this);
         SystemThemeWatcher.Watch(this);
@@ -80,11 +92,6 @@ public partial class MainWindow : FluentWindow
         _stripFlashAnimator = new LedStripFlashAnimator(Rig.LedStrips, decaySeconds: 0.35);
         _lavaLampAnimator = new LedStripLavaLampAnimator(Rig.LedStrips);
         _laserAnimator = new LaserFanAnimator(Rig.Laser);
-
-        // TEMP: forcing the laser's wave effect permanently on for testing
-        // the reduced tilt range - see the matching note further down where
-        // the per-buffer toggle is also forced to true. Remove both when done.
-        _laserAnimator.SetActive(true);
 
         // A chord hit only means anything visually if the melodic passage
         // has actually settled into "one sustained chord" by the time it
@@ -111,10 +118,33 @@ public partial class MainWindow : FluentWindow
         foreach (var strip in Rig.LedStrips)
             strip.Fill(Colors.Black);
 
+        _screenMirrorTimer.Tick += (_, _) =>
+        {
+            if (_screenMirrorCapture.Capture() is { } frame)
+                RekordboxMirrorImage.Source = frame;
+        };
+
         Loaded += (_, _) => StartListening();
         Loaded += (_, _) => TryAutoConnectDmx();
+        Loaded += (_, _) => _screenMirrorTimer.Start();
         Closed += (_, _) => _audioCapture.Dispose();
         Closed += (_, _) => _dmxOutput.Dispose();
+        Closed += (_, _) => _screenMirrorTimer.Stop();
+    }
+
+    // Enumerating monitors via System.Windows.Forms.Screen and picking the
+    // smallest Bounds.Left didn't actually land on the leftmost monitor in
+    // practice (likely a DPI/timing quirk reading Left/Top this early in
+    // startup) - a direct, confirmed-correct offset from the primary
+    // monitor is simpler and actually works.
+    private const int LeftmostMonitorOffsetPixels = -4320;
+
+    private void PositionFullScreenOnLeftmostMonitor()
+    {
+        WindowState = WindowState.Normal;
+        Left = LeftmostMonitorOffsetPixels;
+        Top = 0;
+        WindowState = WindowState.Maximized;
     }
 
     private void DmxPortComboBox_DropDownOpened(object sender, EventArgs e)
@@ -259,9 +289,16 @@ public partial class MainWindow : FluentWindow
         // ended, or note activity picked back up into a real arpeggio) so
         // the laser can resume its normal fan.
         _chordSustainDetector.Process(e.Samples, e.SampleRate, _melodicPassageDetector.IsActive);
-        if (_wasSustainedChord && !_chordSustainDetector.IsSustainedChord)
-            _laserAnimator.SetChordMode(false);
-        _wasSustainedChord = _chordSustainDetector.IsSustainedChord;
+        var isChordActive = _chordSustainDetector.IsSustainedChord;
+        if (isChordActive != _wasSustainedChord)
+        {
+            if (!isChordActive)
+                _laserAnimator.SetChordMode(false);
+            _wasSustainedChord = isChordActive;
+
+            // TEMP: debug status text, for correlating against real audio. Remove when done.
+            Dispatcher.BeginInvoke(() => ChordStatusText.Text = isChordActive ? "Active" : "Inactive");
+        }
 
         // Brightness follows the mid arpeggios mostly and the bassline a
         // little - a plain double, so it's safe to set directly from this
@@ -279,12 +316,10 @@ public partial class MainWindow : FluentWindow
             Dispatcher.BeginInvoke(() =>
             {
                 _lavaLampAnimator.SetActive(wantsLavaLamp);
+                _laserAnimator.SetActive(wantsLavaLamp);
 
-                // TEMP: forcing the laser's wave effect permanently on for
-                // testing the reduced tilt range, instead of only while a
-                // melodic passage is detected. Revert to
-                // _laserAnimator.SetActive(wantsLavaLamp) afterward.
-                _laserAnimator.SetActive(true);
+                // TEMP: debug status text, for correlating against real audio. Remove when done.
+                WaveStatusText.Text = wantsLavaLamp ? "Active" : "Inactive";
             });
         }
 
@@ -337,10 +372,10 @@ public partial class MainWindow : FluentWindow
                 _floorTopRightAmbientAnimator.FlashColor = Colors.White;
                 _floorBottomLeftAmbientAnimator.FlashColor = Colors.White;
                 _floorBottomRightAmbientAnimator.FlashColor = Colors.White;
-                _floorTopLeftAmbientAnimator.Flash(decaySeconds);
-                _floorTopRightAmbientAnimator.Flash(decaySeconds);
-                _floorBottomLeftAmbientAnimator.Flash(decaySeconds);
-                _floorBottomRightAmbientAnimator.Flash(decaySeconds);
+                _floorTopLeftAmbientAnimator.Flash(decaySeconds, PercussionFlashPeakIntensity);
+                _floorTopRightAmbientAnimator.Flash(decaySeconds, PercussionFlashPeakIntensity);
+                _floorBottomLeftAmbientAnimator.Flash(decaySeconds, PercussionFlashPeakIntensity);
+                _floorBottomRightAmbientAnimator.Flash(decaySeconds, PercussionFlashPeakIntensity);
             });
         };
         return detector;
@@ -351,6 +386,11 @@ public partial class MainWindow : FluentWindow
     // sharp, distinct pulses instead of blurring into one continuous glow
     // once hits arrive faster than a fixed decay time could ever clear.
     private const double PercussionFlashDecayFraction = 0.6;
+
+    // Floor par lights peak at 60% brightness for a percussion-buildup
+    // flash rather than full white - a touch softer than the whole-rig
+    // impact flash (which stays full brightness).
+    private const double PercussionFlashPeakIntensity = 0.6;
 
     // Once the whole-rig white flash fires, suppress it from firing again for
     // this long - long enough to cover the handful of hits it typically takes

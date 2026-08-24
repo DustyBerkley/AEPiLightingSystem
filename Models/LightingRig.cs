@@ -33,6 +33,11 @@ public class LightingRig
 
     public WallStripLight WallStripLight { get; } = new();
 
+    // Read live off the Rekordbox screen mirror by BpmReader - null until a
+    // reading has been confirmed (see BpmReader's debounce requirement).
+    public double? Deck1Bpm { get; set; }
+    public double? Deck2Bpm { get; set; }
+
     public LightingRig()
     {
         TopLeftPar = new ParLight(1, "Par 1 - Wall Top Left");

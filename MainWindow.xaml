@@ -16,7 +16,7 @@
     ExtendsContentIntoTitleBar="True"
     WindowBackdropType="None"
     WindowCornerPreference="Round"
-    WindowStartupLocation="CenterScreen"
+    WindowStartupLocation="Manual"
     Background="#FF080808">
 
     <Window.Resources>
@@ -50,11 +50,12 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
         <Image
-            Grid.RowSpan="4"
+            Grid.RowSpan="5"
             IsHitTestVisible="False"
             Opacity="0.035"
             Source="pack://application:,,,/Assets/background_texture.png"
@@ -72,6 +73,31 @@
             Margin="24,4,24,4"
             HorizontalAlignment="Right"
             Orientation="Horizontal">
+            <!--  TEMP: laser wave/chord detector status, for correlating against real audio. Remove when done.  -->
+            <TextBlock
+                VerticalAlignment="Center"
+                FontSize="12"
+                Foreground="#AAFFFFFF"
+                Text="Wave: " />
+            <TextBlock
+                x:Name="WaveStatusText"
+                Margin="0,0,16,0"
+                VerticalAlignment="Center"
+                FontSize="12"
+                Foreground="#AAFFFFFF"
+                Text="Inactive" />
+            <TextBlock
+                VerticalAlignment="Center"
+                FontSize="12"
+                Foreground="#AAFFFFFF"
+                Text="Chord: " />
+            <TextBlock
+                x:Name="ChordStatusText"
+                Margin="0,0,16,0"
+                VerticalAlignment="Center"
+                FontSize="12"
+                Foreground="#AAFFFFFF"
+                Text="Inactive" />
             <TextBlock
                 VerticalAlignment="Center"
                 FontSize="12"
@@ -115,8 +141,30 @@
                 Text="Not connected" />
         </StackPanel>
 
-        <Viewbox Grid.Row="3" Margin="24" Stretch="Uniform">
-            <Grid Width="1200" Height="650">
+        <!--  Live mirror of the center 700x150px of the middle monitor,
+              where Rekordbox runs fullscreen (see ScreenMirrorCapture).  -->
+        <Border
+            Grid.Row="3"
+            Margin="24,4,24,8"
+            HorizontalAlignment="Center"
+            Background="#FF040404"
+            BorderBrush="#22FFFFFF"
+            BorderThickness="1"
+            CornerRadius="4">
+            <Image
+                x:Name="RekordboxMirrorImage"
+                Width="700"
+                Height="150"
+                Stretch="Uniform" />
+        </Border>
+
+        <!--  Grid is sized larger than the Viewbox's available space on
+              purpose - Stretch="Uniform" scales (and centers) it down to
+              fit, so enlarging this logical canvas shrinks every lighting
+              effect GUI proportionally without needing to touch each one
+              individually.  -->
+        <Viewbox Grid.Row="4" Margin="24" Stretch="Uniform">
+            <Grid Width="1500" Height="813">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
@@ -235,9 +283,10 @@
                         Width="360"
                         Height="150"
                         Margin="0,0,0,28"
+                        HorizontalAlignment="Center"
                         Laser="{Binding Laser}" />
 
-                    <StackPanel Orientation="Horizontal">
+                    <StackPanel HorizontalAlignment="Center" Orientation="Horizontal">
                         <controls:LedStripView Width="12" Height="340" Margin="18,0" Strip="{Binding LedStrips[0]}" />
                         <controls:LedStripView Width="12" Height="340" Margin="18,0" Strip="{Binding LedStrips[1]}" />
                         <controls:LedStripView Width="12" Height="340" Margin="18,0" Strip="{Binding LedStrips[2]}" />

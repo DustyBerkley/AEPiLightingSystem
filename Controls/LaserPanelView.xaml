@@ -9,11 +9,7 @@
     d:DesignWidth="500"
     SizeChanged="OnSizeChanged">
 
-    <Border
-        Background="#FF040404"
-        BorderBrush="#22FFFFFF"
-        BorderThickness="1"
-        CornerRadius="4">
+    <Border Background="#FF040404" CornerRadius="4">
         <Canvas x:Name="LineCanvas" ClipToBounds="True" />
     </Border>
 </UserControl>

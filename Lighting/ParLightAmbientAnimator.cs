@@ -57,15 +57,16 @@ public sealed class ParLightAmbientAnimator
     }
 
     /// <summary>
-    /// Spikes to full white, then decays back down to the ambient baseline
-    /// over <paramref name="decaySeconds"/> (default: matches the wall par
+    /// Spikes to <paramref name="peakIntensity"/> (full <see cref="FlashColor"/>
+    /// by default), then decays back down to the ambient baseline over
+    /// <paramref name="decaySeconds"/> (default: matches the wall par
     /// lights' flash). A shorter decay reads as a sharper, more distinct
     /// pulse - useful for timing a flash to a fast, specific event rather
     /// than a generic "something big just happened" flash.
     /// </summary>
-    public void Flash(double? decaySeconds = null)
+    public void Flash(double? decaySeconds = null, double peakIntensity = 1.0)
     {
-        _flashIntensity = 1.0;
+        _flashIntensity = Math.Clamp(peakIntensity, 0.0, 1.0);
         _flashDecaySeconds = Math.Max(MinimumFlashDecaySeconds, decaySeconds ?? DefaultFlashDecaySeconds);
         EnsureRunning();
     }

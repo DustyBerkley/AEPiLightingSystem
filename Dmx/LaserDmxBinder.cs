@@ -1,49 +1,67 @@
 using System;
+using AEPiLightingSystem.Lighting;
 using AEPiLightingSystem.Models;
 
 namespace AEPiLightingSystem.Dmx;
 
 /// <summary>
-/// Drives the Gruolin GL-L03 laser's real DMX output from the on-screen
-/// <see cref="LaserFixture"/> simulation, using the fixture's 34-channel
-/// "Professional" mode (set on the unit itself as address A.001 - see the
-/// printed/PDF manual's DMX512 Control Mode table).
+/// Drives the Gruolin GL-L03 laser's real DMX output from
+/// <see cref="LaserFixture.Groups"/>, using the fixture's 34-channel
+/// "Professional" mode (set on the unit itself as address A.014). Each of
+/// the fixture's two lenses has its own 17-channel block (channels 1-17
+/// and 18-34), but per real-hardware testing (2026-08-22, via QLC+) both
+/// lenses are driven identically from <see cref="LaserFixture.Groups"/>[0]
+/// alone - block 2 just mirrors whatever block 1 ends up with, rather than
+/// being derived from its own separate group. The on-screen simulation
+/// still independently mirrors group 0 into group 1 for visual variety
+/// (see <see cref="Lighting.LaserFanAnimator"/>); this class simply doesn't
+/// use that second group for DMX output.
 ///
-/// The hardware doesn't work like the simulation. <see cref="LaserFanAnimator"/>
-/// (and <see cref="Controls.LaserPanelView"/>) model the fan as
-/// <see cref="LaserFixture.BeamCount"/> independently colored/tilted beams,
-/// which is a convenient way to draw a lava-lamp-style effect on screen, but
-/// the real unit is a 2-lens galvo projector that draws one vector pattern
-/// per lens from a built-in gallery (selected via DMX, not drawn point by
-/// point) - it can't light 35 independent beams. So rather than a 1:1
-/// mapping, each lens is driven by an *aggregate* of one half of the
-/// simulated fan: the 34 channels split into two identical 17-channel
-/// blocks (channels 1-17 and 18-34 - confirmed from the manual's channel
-/// table, which repeats the same 17-function layout twice), one per lens,
-/// matching the fan's existing left-half-simulated/right-half-mirrored
-/// design.
+/// - Pattern Selection pinned to 19 (within the Line Gallery) - CONFIRMED
+///   via direct QLC+ fader testing (2026-08-22) to draw a single horizontal
+///   line.
+/// - Horizontal Zoom controls that line's width; Horizontal Movement its
+///   left/right position - both also confirmed the same way. Horizontal
+///   Zoom's usable range is 0-50, not the full 0-127 static range - going
+///   past 50 is what caused the beam to collapse toward a dot during
+///   earlier tuning.
+/// - Color Change values 128-159 (one of the "colorful auto-cycle" modes)
+///   show no laser at all on this unit - confirmed and avoided entirely.
+///   Color is instead mapped from each group's actual
+///   <see cref="LaserGroup.HueDegrees"/> onto the nearest fixed color macro
+///   (Red/Yellow/Green/Blue/Indigo/Pink).
+/// - Pattern Scaling is animated slowly within its confirmed range,
+///   45-115 - per real-hardware feedback, this also visibly moves the
+///   pattern vertically as a side effect, so Vertical Movement doesn't need
+///   (and no longer gets) any separate animation of its own; an earlier
+///   attempt at driving Vertical Movement directly (alone, and previously
+///   also tied to Scaling in a more complex combined animation) never
+///   produced a working result, up to and including a total regression
+///   that had to be fully reverted.
+/// - Rotation is animated slowly within its confirmed range, 0-30. An
+///   earlier attempt animated it around the wrong range (63+-8, i.e.
+///   55-71) and made the laser stop working entirely - that range was never
+///   actually verified, just assumed by analogy with the other "static
+///   X, 0-127, centered at 63" channels, which turned out not to hold here.
+/// - Chord mode (<see cref="LaserFixture.IsChordMode"/>) uses its own
+///   confirmed-good values entirely separate from the wave/lava-lamp
+///   animation above: Scaling/Rotation are fixed (not wandered), and
+///   Horizontal/Vertical Movement each get a fresh random value picked once
+///   per chord hit (<see cref="LaserFixture.ChordHitIndex"/>) from their own
+///   confirmed ranges, rather than Horizontal Movement tracking
+///   CenterFraction and Vertical Movement sitting at 0 the way they do in
+///   wave mode.
 ///
-/// For each half: whether it's on comes from whether any beam in it has any
-/// brightness; the vertical-movement channel follows a brightness-weighted
-/// average of that half's beam tilt (approximating "which way this half's
-/// light is currently panned"); color is left on the fixture's own
-/// "colorful color change" auto-cycle rather than mapped from the sim's
-/// per-beam hue, since these channels only select fixed/cycling color
-/// macros, not arbitrary RGB. Everything else (pattern gallery, scaling,
-/// rotation, zoom, distortion, etc.) is pinned to a static default - most
-/// importantly <see cref="PatternIndex"/>, which is a placeholder. The
-/// manual documents which *ranges* of the pattern-select channel mean
-/// "animation gallery" vs. "line gallery" but not which specific value
-/// within a gallery draws which shape (there's no index chart for it) - so
-/// which value actually draws something fan-like has to be found by
-/// watching the real beam and adjusting this constant.
+/// Vertical Zoom, Force Tinting, Node Highlighting/Expansion/Gradient/
+/// Distortion, Filter Selection, and Out-of-Bounds/Size are left alone
+/// entirely (static safe defaults, never touched after startup) - these
+/// haven't been individually verified and there's no reason to risk them.
 /// </summary>
 public sealed class LaserDmxBinder
 {
     // Offsets within one 17-channel pattern block (see the manual's 34CH
     // Professional Mode table - block 2 repeats this exact layout at
-    // BlockSize past block 1, except its GallerySelection slot (channel 20)
-    // is documented as "no function reserve" - harmless to still write.
+    // BlockSize past block 1).
     private const int BlockSize = 17;
 
     private const int TotalSwitchOffset = 0;
@@ -64,51 +82,90 @@ public sealed class LaserDmxBinder
     private const int DistortionOffset = 15;
     private const int FilterSelectionOffset = 16;
 
-    // CH3/CH20 (gallery select): manual says 0-239 = Animation Gallery,
-    // 240-255 = Line Gallery. The fan/wave/zoom/dot/flip patterns from the
-    // product listing read as "Line" effects, so pin to the top of that
-    // range.
     private const byte LineGalleryValue = 255;
 
-    // CH4/CH21 (pattern-within-gallery select, 0-255): PLACEHOLDER. No
-    // index chart exists for what each value actually draws - this needs to
-    // be tuned by hand while watching the real beam. Starts near the high
-    // end of the range on the theory that fan/wave-type line effects are as
-    // likely as anything else to live there, but treat this as a starting
-    // guess, not a confirmed value.
-    private const byte PatternIndex = 250;
+    // CONFIRMED: draws a single horizontal line.
+    private const byte HorizontalLinePatternIndex = 19;
 
-    // CH5/CH22 (pattern scaling): 0-127 = static size. Mid-high so the
-    // pattern reads at a reasonably full size without tipping into the
-    // dynamic-zoom ranges (128+).
-    private const byte StaticScaleValue = 100;
-
-    // CH6/CH23, CH7/CH24, CH9/CH25... "static X" is 0-127 with the dynamic
-    // ranges starting at 128 - centering at 63 keeps rotation/horizontal
-    // pan/zoom parked in the middle of their static range (no drift, no
-    // distortion) since the simulation doesn't drive those.
     private const byte CenteredStaticValue = 63;
 
-    // CH12/CH29 (color change): 128-159 = "colorful color change of the
-    // whole picture" (auto rainbow cycle) - the closest real-hardware analog
-    // to the simulation's continuously drifting hue, since these channels
-    // only pick fixed/cycling color macros rather than arbitrary RGB.
-    private const byte ColorfulCycleValue = 140;
+    // How far Horizontal Movement swings either side of center for
+    // LaserGroup.CenterFraction = +-1 - raw DMX units, no confirmed
+    // degrees-per-unit figure for this channel. Narrowed from an initial
+    // 63 after real-hardware feedback that the beams' horizontal spread
+    // was too wide.
+    private const double HorizontalMoveHalfRange = 35.0;
 
-    // Below this brightness-weighted total, treat a half as "nothing lit"
-    // rather than flickering the total-switch channel on/off from residual
-    // near-black display color during fades.
-    private const double OnThreshold = 3.0;
+    // CONFIRMED: Horizontal Zoom's real usable range - not the full 0-127
+    // static span. A fully-wide group (WidthFraction = 1) uses the top of
+    // this range.
+    private const double HorizontalZoomMax = 50.0;
 
-    // Beam tilt (radians) is produced by LaserFanAnimator bounded well
-    // inside this range; used only to normalize into CH8/CH25's 0-127
-    // static-shift span, so it doesn't need to match that animator's
-    // internal constant exactly - just comfortably cover it.
-    private const double AssumedMaxTiltRadians = 0.25;
+    // CONFIRMED: Rotation's animated range for the normal wave/lava-lamp
+    // effect.
+    private const double RotationMin = 0.0;
+    private const double RotationMax = 30.0;
+
+    // CONFIRMED: Pattern Scaling's animated range for the normal wave/
+    // lava-lamp effect - also visibly moves the pattern vertically as a
+    // side effect, so this alone covers what the earlier separate Vertical
+    // Movement animation was trying to do.
+    private const double ScalingMin = 45.0;
+    private const double ScalingMax = 115.0;
+
+    // CONFIRMED chord-mode baseline for Scaling/Rotation - deliberately
+    // kept separate from the wave/lava-lamp animation's own ranges above
+    // rather than sharing them, since a chord is a single static "beam"
+    // rather than a continuously wandering line and real-hardware testing
+    // confirmed good values well outside the wave animation's own range
+    // (this is a starting point to keep iterating from, not necessarily
+    // final).
+    private const byte ChordScalingValue = 125;
+    private const byte ChordRotationValue = 123;
+
+    // CONFIRMED chord-mode ranges for Horizontal/Vertical Movement - a
+    // fresh value is picked from each range once per chord hit (see
+    // LaserFixture.ChordHitIndex), independent of the wave animation's own
+    // CenterFraction-driven position and always-0 Vertical Movement.
+    private const int ChordHorizontalMin = 44;
+    private const int ChordHorizontalMax = 78;
+    private const int ChordVerticalMin = 33;
+    private const int ChordVerticalMax = 67;
+
+    // Slow pace for Scaling's wander - a "lava lamp" pace, not active
+    // movement.
+    private const double EvolveSpeed = 0.12;
+
+    // Rotation gets its own faster (but still not quick) pace, separate
+    // from Scaling, per real-hardware feedback.
+    private const double RotationEvolveSpeed = 0.22;
+
+    // Color Change (128-159 is a dead zone on this unit - see class
+    // summary) fixed-macro sub-ranges and a representative value in each,
+    // paired with an approximate hue center for nearest-match lookup.
+    private static readonly (double HueDegrees, byte ChannelValue)[] ColorMacros =
+    [
+        (0.0, 12),    // Red (8-15)
+        (60.0, 20),   // Yellow (16-23)
+        (120.0, 28),  // Green (24-31)
+        (240.0, 44),  // Blue (40-47)
+        (275.0, 36),  // Indigo (32-39)
+        (330.0, 52),  // Pink (48-55)
+    ];
 
     private readonly LaserFixture _laser;
     private readonly DmxUniverse _universe;
     private readonly int _baseChannel;
+
+    private readonly SineNoise _scalingNoise;
+    private readonly SineNoise _rotationNoise;
+    private readonly Random _random;
+    private double _time;
+    private DateTime _lastAnimTime = DateTime.MinValue;
+
+    private int _lastSeenChordHitIndex = -1;
+    private byte _chordHorizontalValue;
+    private byte _chordVerticalValue;
 
     public LaserDmxBinder(LaserFixture laser, DmxUniverse universe, int baseChannel = 1)
     {
@@ -116,24 +173,23 @@ public sealed class LaserDmxBinder
         _universe = universe;
         _baseChannel = baseChannel;
 
-        InitStaticChannels(_baseChannel);
-        InitStaticChannels(_baseChannel + BlockSize);
+        _random = new Random();
+        _scalingNoise = new SineNoise(_random.Next());
+        _rotationNoise = new SineNoise(_random.Next());
 
-        ApplyDynamicChannels();
-        laser.BeamsChanged += (_, _) => ApplyDynamicChannels();
+        for (var i = 0; i < LaserFixture.GroupCount; i++)
+            InitStaticChannels(_baseChannel + i * BlockSize);
+
+        ApplyAll();
+        laser.GroupsChanged += (_, _) => ApplyAll();
     }
 
     private void InitStaticChannels(int block)
     {
         _universe.SetChannel(block + GallerySelectionOffset, LineGalleryValue);
-        _universe.SetChannel(block + PatternSelectionOffset, PatternIndex);
-        _universe.SetChannel(block + ScalingOffset, StaticScaleValue);
-        _universe.SetChannel(block + RotationOffset, CenteredStaticValue);
-        _universe.SetChannel(block + HorizontalMovementOffset, CenteredStaticValue);
-        _universe.SetChannel(block + HorizontalZoomOffset, CenteredStaticValue);
-        _universe.SetChannel(block + VerticalZoomOffset, CenteredStaticValue);
+        _universe.SetChannel(block + PatternSelectionOffset, HorizontalLinePatternIndex);
+        _universe.SetChannel(block + VerticalZoomOffset, 0);
         _universe.SetChannel(block + ForceTintingOffset, 0);
-        _universe.SetChannel(block + ColorChangeOffset, ColorfulCycleValue);
         _universe.SetChannel(block + NodeHighlightingOffset, 0);
         _universe.SetChannel(block + NodeExpansionOffset, 0);
         _universe.SetChannel(block + GradientOffset, 0);
@@ -142,35 +198,92 @@ public sealed class LaserDmxBinder
         _universe.SetChannel(block + OutOfBoundsSizeOffset, 0);
     }
 
-    private void ApplyDynamicChannels()
+    private void ApplyAll()
     {
-        var beamCount = LaserFixture.BeamCount;
-        var domainEnd = (beamCount - 1) / 2;
+        var now = DateTime.UtcNow;
+        var dt = _lastAnimTime == DateTime.MinValue ? 0.0 : (now - _lastAnimTime).TotalSeconds;
+        _lastAnimTime = now;
+        _time += dt;
 
-        ApplyHalf(_baseChannel, 0, domainEnd);
-        ApplyHalf(_baseChannel + BlockSize, domainEnd + 1, beamCount - 1);
-    }
+        var group = _laser.Groups[0];
 
-    private void ApplyHalf(int block, int startIndex, int endIndex)
-    {
-        var weightTotal = 0.0;
-        var weightedTilt = 0.0;
-
-        for (var i = startIndex; i <= endIndex; i++)
+        byte scaling, rotation, horizontalShift, verticalMovement;
+        if (_laser.IsChordMode)
         {
-            var color = _laser.BeamColors[i];
-            var weight = (color.R + color.G + color.B) / 3.0;
-            weightTotal += weight;
-            weightedTilt += weight * _laser.BeamTiltRadians[i];
+            // Chord mode: fixed confirmed-good baseline, not wandered -
+            // see class summary. Horizontal/Vertical Movement get a fresh
+            // random value once per chord hit rather than every tick.
+            scaling = ChordScalingValue;
+            rotation = ChordRotationValue;
+
+            if (_laser.ChordHitIndex != _lastSeenChordHitIndex)
+            {
+                _lastSeenChordHitIndex = _laser.ChordHitIndex;
+                _chordHorizontalValue = (byte)_random.Next(ChordHorizontalMin, ChordHorizontalMax + 1);
+                _chordVerticalValue = (byte)_random.Next(ChordVerticalMin, ChordVerticalMax + 1);
+            }
+
+            horizontalShift = _chordHorizontalValue;
+            verticalMovement = _chordVerticalValue;
+        }
+        else
+        {
+            var scalingNoise01 = _scalingNoise.Sample(0.0, _time * EvolveSpeed);
+            var scalingValue = ScalingMin + scalingNoise01 * (ScalingMax - ScalingMin);
+            scaling = (byte)Math.Round(Math.Clamp(scalingValue, 0.0, 127.0));
+
+            var rotationNoise01 = _rotationNoise.Sample(0.0, _time * RotationEvolveSpeed);
+            var rotationValue = RotationMin + rotationNoise01 * (RotationMax - RotationMin);
+            rotation = (byte)Math.Round(Math.Clamp(rotationValue, 0.0, 127.0));
+
+            var horizontalShiftValue = CenteredStaticValue + group.CenterFraction * HorizontalMoveHalfRange;
+            horizontalShift = (byte)Math.Clamp(horizontalShiftValue, 0.0, 127.0);
+            verticalMovement = 0;
         }
 
-        var isOn = weightTotal > OnThreshold;
-        var tilt = weightTotal > 0.0 ? weightedTilt / weightTotal : 0.0;
+        var isOn = group.Color.R > 0 || group.Color.G > 0 || group.Color.B > 0;
 
-        var verticalShift = CenteredStaticValue + tilt / AssumedMaxTiltRadians * CenteredStaticValue;
-        verticalShift = Math.Clamp(verticalShift, 0.0, 127.0);
+        var zoom = Math.Clamp(group.WidthFraction, 0.0, 1.0) * HorizontalZoomMax;
+        zoom = Math.Clamp(zoom, 0.0, HorizontalZoomMax);
 
-        _universe.SetChannel(block + TotalSwitchOffset, isOn ? (byte)255 : (byte)0);
-        _universe.SetChannel(block + VerticalMovementOffset, (byte)verticalShift);
+        var colorMacro = NearestColorMacro(group.HueDegrees);
+
+        for (var i = 0; i < LaserFixture.GroupCount; i++)
+        {
+            var block = _baseChannel + i * BlockSize;
+            _universe.SetChannel(block + TotalSwitchOffset, isOn ? (byte)255 : (byte)0);
+            _universe.SetChannel(block + HorizontalMovementOffset, horizontalShift);
+            _universe.SetChannel(block + VerticalMovementOffset, verticalMovement);
+            _universe.SetChannel(block + HorizontalZoomOffset, (byte)zoom);
+            _universe.SetChannel(block + ColorChangeOffset, colorMacro);
+            _universe.SetChannel(block + ScalingOffset, scaling);
+            _universe.SetChannel(block + RotationOffset, rotation);
+        }
+    }
+
+    private static byte NearestColorMacro(double hueDegrees)
+    {
+        hueDegrees = ((hueDegrees % 360.0) + 360.0) % 360.0;
+
+        var best = ColorMacros[0];
+        var bestDistance = CircularHueDistance(hueDegrees, best.HueDegrees);
+
+        foreach (var macro in ColorMacros)
+        {
+            var distance = CircularHueDistance(hueDegrees, macro.HueDegrees);
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                best = macro;
+            }
+        }
+
+        return best.ChannelValue;
+    }
+
+    private static double CircularHueDistance(double a, double b)
+    {
+        var diff = Math.Abs(a - b) % 360.0;
+        return Math.Min(diff, 360.0 - diff);
     }
 }

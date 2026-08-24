@@ -20,15 +20,11 @@ public class WallStripLight : INotifyPropertyChanged
 {
     public const int LightCount = 8;
 
-    /// <summary>
-    /// "Forward" is angled 17 degrees down from perfectly horizontal, not
-    /// dead level - <see cref="DownAngleDegrees"/> = facing further down
-    /// still, from this same reference.
-    /// </summary>
-    public const double ForwardAngleDegrees = 17.0;
+    /// <summary>0 degrees from horizontal - dead level.</summary>
+    public const double ForwardAngleDegrees = 0.0;
 
-    /// <summary>60 degrees from horizontal, not a full 90 - a straight-down aim overshot the intended coverage area.</summary>
-    public const double DownAngleDegrees = 60.0;
+    /// <summary>17 degrees down from perfectly horizontal.</summary>
+    public const double DownAngleDegrees = 17.0;
 
     public ReadOnlyCollection<ParLight> Lights { get; }
 

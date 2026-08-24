@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "dgSpecHash": "v/du9EoO7jI=",
+  "dgSpecHash": "jXGVowInm2U=",
   "success": true,
   "projectFilePath": "C:\\Users\\dusty\\Dropbox\\programs\\csexe\\AEPiLightingSystem\\AEPiLightingSystem.csproj",
   "expectedPackageFiles": [
@@ -23,7 +23,8 @@
     "C:\\Users\\dusty\\.nuget\\packages\\system.security.accesscontrol\\4.7.0\\system.security.accesscontrol.4.7.0.nupkg.sha512",
     "C:\\Users\\dusty\\.nuget\\packages\\system.security.principal.windows\\4.7.0\\system.security.principal.windows.4.7.0.nupkg.sha512",
     "C:\\Users\\dusty\\.nuget\\packages\\wpf-ui\\4.3.0\\wpf-ui.4.3.0.nupkg.sha512",
-    "C:\\Users\\dusty\\.nuget\\packages\\wpf-ui.abstractions\\4.3.0\\wpf-ui.abstractions.4.3.0.nupkg.sha512"
+    "C:\\Users\\dusty\\.nuget\\packages\\wpf-ui.abstractions\\4.3.0\\wpf-ui.abstractions.4.3.0.nupkg.sha512",
+    "C:\\Users\\dusty\\.nuget\\packages\\microsoft.windows.sdk.net.ref\\10.0.19041.56\\microsoft.windows.sdk.net.ref.10.0.19041.56.nupkg.sha512"
   ],
   "logs": []
 }

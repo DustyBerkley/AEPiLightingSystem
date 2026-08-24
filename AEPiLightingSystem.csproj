@@ -2,11 +2,25 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <!--  windows10.0.19041.0 suffix (rather than plain net8.0-windows) is
+          what turns on the .NET SDK's built-in WinRT projections, needed to
+          call Windows.Media.Ocr directly for the BPM reader - no separate
+          NuGet package required.  -->
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <!--  Needed for Screen.AllScreens (monitor enumeration for the Rekordbox
+          mirror capture region). Its implicit usings for System.Windows.Forms
+          and System.Drawing collide with WPF's own Color/UserControl types,
+          so they're removed below while keeping the assembly reference.  -->
+    <UseWindowsForms>true</UseWindowsForms>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="NAudio" Version="2.2.1" />
