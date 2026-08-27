@@ -24,6 +24,9 @@
         <SolidColorBrush x:Key="ApplicationBackgroundBrush" Color="#FF080808" />
 
         <conv:ColorToBrushConverter x:Key="ColorToBrushConverter" />
+        <conv:DoubleToStarGridLengthConverter x:Key="DoubleToStarGridLengthConverter" />
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+        <conv:FaderActivationToBrushConverter x:Key="FaderActivationToBrushConverter" />
 
         <PointCollection x:Key="HexagonPoints">25,0 75,0 100,43.5 75,87 25,87 0,43.5</PointCollection>
 
@@ -51,11 +54,15 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <Image
-            Grid.RowSpan="5"
+            Grid.RowSpan="9"
             IsHitTestVisible="False"
             Opacity="0.035"
             Source="pack://application:,,,/Assets/background_texture.png"
@@ -67,11 +74,74 @@
             </ui:TitleBar.Icon>
         </ui:TitleBar>
 
+        <!--  Which mode the whole rig is currently running in - see
+              MainWindow.SetLightingMode. Full auto: automated animations
+              only. Semi auto: automated animations + manual fader effects
+              together. Manual: automated animations off, fader effects only.  -->
+        <StackPanel
+            Grid.Row="0"
+            Margin="0,40,0,0"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Top">
+            <TextBlock
+                x:Name="LightingModeText"
+                HorizontalAlignment="Center"
+                FontSize="13"
+                FontWeight="SemiBold"
+                Foreground="#AAFFFFFF"
+                Text="Manual" />
+            <StackPanel Margin="0,2,0,0" HorizontalAlignment="Center" Orientation="Horizontal">
+                <ui:Button
+                    x:Name="FullAutoModeButton"
+                    Margin="2,0"
+                    Content="Full Auto"
+                    Click="LightingModeButton_Click" />
+                <ui:Button
+                    x:Name="SemiAutoModeButton"
+                    Margin="2,0"
+                    Content="Semi Auto"
+                    Click="LightingModeButton_Click" />
+                <ui:Button
+                    x:Name="ManualModeButton"
+                    Margin="2,0"
+                    Content="Manual"
+                    Click="LightingModeButton_Click" />
+            </StackPanel>
+        </StackPanel>
+
+        <!--  Shown whenever neither deck is playing (and DMX is connected -
+              see MainWindow.UpdateStatusBanners).  -->
+        <TextBlock
+            x:Name="RekordboxPausedText"
+            Grid.Row="0"
+            Margin="0,100,0,0"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Top"
+            FontSize="28"
+            FontWeight="SemiBold"
+            Foreground="#CC0000"
+            Text="Rekordbox Paused"
+            Visibility="Collapsed" />
+
+        <!--  Shown whenever DMX isn't connected - see MainWindow.UpdateStatusBanners. Visible by default since that's the actual starting state before any connect attempt. Takes priority over RekordboxPausedText when both would apply - same spot on screen, only one shows at a time.  -->
+        <TextBlock
+            x:Name="DmxNotDetectedText"
+            Grid.Row="0"
+            Margin="0,100,0,0"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Top"
+            FontSize="28"
+            FontWeight="SemiBold"
+            Foreground="#CC0000"
+            Text="DMX Not Detected"
+            Visibility="Visible" />
+
         <!--  Audio capture status - read-only; the device itself is chosen automatically  -->
         <StackPanel
-            Grid.Row="1"
-            Margin="24,4,24,4"
+            Grid.Row="0"
+            Margin="24,50,24,4"
             HorizontalAlignment="Right"
+            VerticalAlignment="Top"
             Orientation="Horizontal">
             <!--  TEMP: laser wave/chord detector status, for correlating against real audio. Remove when done.  -->
             <TextBlock
@@ -111,11 +181,66 @@
                 Text="Not listening" />
         </StackPanel>
 
-        <!--  DMX connection bar  -->
+        <!--  BPM of whichever deck currently has the higher channel volume -
+              see MainWindow.UpdateMasterBpm. Pinned to the top-left corner
+              of the window, above/beside the title bar's own icon+text.  -->
         <StackPanel
-            Grid.Row="2"
-            Margin="24,4,24,8"
+            Grid.Row="0"
+            Margin="20,50,0,0"
+            HorizontalAlignment="Left"
+            VerticalAlignment="Top">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock
+                    VerticalAlignment="Center"
+                    FontSize="16"
+                    FontWeight="Normal"
+                    Foreground="#AAFFFFFF"
+                    Text="BPM " />
+                <TextBlock
+                    x:Name="MasterBpmText"
+                    VerticalAlignment="Center"
+                    FontSize="16"
+                    FontWeight="Normal"
+                    Foreground="#FFFFFFFF"
+                    Text="--" />
+
+                <!--  Current beat (1-4) within the measure, inferred from the
+                      master-deck measure-start marker + master BPM - see
+                      MainWindow.UpdateBeatNumber/FlashBeatNumber.  -->
+                <TextBlock
+                    x:Name="BeatNumberText"
+                    Margin="12,0,0,0"
+                    VerticalAlignment="Center"
+                    FontSize="16"
+                    FontWeight="Bold"
+                    Foreground="#FFFFFFFF"
+                    Text="-" />
+            </StackPanel>
+
+            <!--  Whichever deck currently has the higher channel volume - see MainWindow.UpdateMasterBpm.  -->
+            <StackPanel Margin="0,4,0,0" Orientation="Horizontal">
+                <TextBlock
+                    VerticalAlignment="Center"
+                    FontSize="12"
+                    Foreground="#AAFFFFFF"
+                    Text="Master: " />
+                <TextBlock
+                    x:Name="MasterDeckText"
+                    VerticalAlignment="Center"
+                    FontSize="12"
+                    Foreground="#AAFFFFFF"
+                    Text="--" />
+            </StackPanel>
+        </StackPanel>
+
+        <!--  DMX connection bar - pinned into Row 0 like the BPM/status
+              panels above it, since Row 1/2 no longer reliably reserve the
+              space this used to sit in after those panels moved.  -->
+        <StackPanel
+            Grid.Row="0"
+            Margin="24,78,24,8"
             HorizontalAlignment="Right"
+            VerticalAlignment="Top"
             Orientation="Horizontal">
             <TextBlock
                 Margin="0,0,10,0"
@@ -142,28 +267,349 @@
         </StackPanel>
 
         <!--  Live mirror of the center 700x150px of the middle monitor,
-              where Rekordbox runs fullscreen (see ScreenMirrorCapture).  -->
-        <Border
+              where Rekordbox runs fullscreen (see ScreenMirrorCapture), plus
+              the per-deck BPM/volume values read off of it (see BpmReader/
+              VolumeReader). Hidden now that everything's tuned and combined
+              into the single master BPM readout up in the status bar - the
+              captures/readers underneath keep running regardless, since
+              nothing here is bound to Visibility.  -->
+        <StackPanel
             Grid.Row="3"
             Margin="24,4,24,8"
             HorizontalAlignment="Center"
-            Background="#FF040404"
-            BorderBrush="#22FFFFFF"
-            BorderThickness="1"
-            CornerRadius="4">
-            <Image
-                x:Name="RekordboxMirrorImage"
-                Width="700"
-                Height="150"
-                Stretch="Uniform" />
-        </Border>
+            Orientation="Horizontal"
+            Visibility="Collapsed">
+            <!--  Full-width mirror - kept alive (BpmReader still crops its
+                  frames off RekordboxMirrorImage every tick) but no longer
+                  shown, now that the crop regions below are tuned.  -->
+            <Border
+                Background="#FF040404"
+                BorderBrush="#22FFFFFF"
+                BorderThickness="1"
+                CornerRadius="4"
+                Visibility="Collapsed">
+                <Grid Width="700" Height="150">
+                    <Image
+                        x:Name="RekordboxMirrorImage"
+                        Stretch="Uniform" />
+
+                    <!--  Shows exactly where BpmReader.Deck1Region/Deck2Region
+                          crop from, drawn over the live mirror - positioned
+                          from code-behind in the MainWindow constructor.
+                          Purely a calibration aid for tuning those crop
+                          rectangles against reality.  -->
+                    <Canvas IsHitTestVisible="False">
+                        <Rectangle
+                            x:Name="Deck1RegionOverlay"
+                            Stroke="#FF00FF00"
+                            StrokeThickness="2" />
+                        <Rectangle
+                            x:Name="Deck2RegionOverlay"
+                            Stroke="#FF00AAFF"
+                            StrokeThickness="2" />
+                    </Canvas>
+                </Grid>
+            </Border>
+
+            <!--  Same height as the full mirror above, a quarter the width,
+                  centered on the same fixed point (see ScreenMirrorCapture).  -->
+            <Border
+                Background="#FF040404"
+                BorderBrush="#22FFFFFF"
+                BorderThickness="1"
+                CornerRadius="4">
+                <Image
+                    x:Name="NarrowMirrorImage"
+                    Width="85"
+                    Height="60"
+                    Stretch="Uniform" />
+            </Border>
+
+            <StackPanel Margin="16,0,0,0" VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock
+                        Width="80"
+                        VerticalAlignment="Center"
+                        FontSize="12"
+                        Foreground="#AAFFFFFF"
+                        Text="Deck 1 BPM:" />
+                    <TextBlock
+                        x:Name="Deck1BpmText"
+                        Width="50"
+                        VerticalAlignment="Center"
+                        FontSize="12"
+                        Foreground="#FFFFFFFF"
+                        Text="--" />
+                    <Image x:Name="Deck1BpmDebugImage" Height="30" />
+                </StackPanel>
+                <StackPanel Margin="0,6,0,0" Orientation="Horizontal">
+                    <TextBlock
+                        Width="80"
+                        VerticalAlignment="Center"
+                        FontSize="12"
+                        Foreground="#AAFFFFFF"
+                        Text="Deck 2 BPM:" />
+                    <TextBlock
+                        x:Name="Deck2BpmText"
+                        Width="50"
+                        VerticalAlignment="Center"
+                        FontSize="12"
+                        Foreground="#FFFFFFFF"
+                        Text="--" />
+                    <Image x:Name="Deck2BpmDebugImage" Height="30" />
+                </StackPanel>
+                <StackPanel Margin="0,6,0,0" Orientation="Horizontal">
+                    <TextBlock
+                        Width="80"
+                        VerticalAlignment="Center"
+                        FontSize="12"
+                        Foreground="#AAFFFFFF"
+                        Text="Deck 1 Vol:" />
+                    <TextBlock
+                        x:Name="Deck1VolumeText"
+                        Width="50"
+                        VerticalAlignment="Center"
+                        FontSize="12"
+                        Foreground="#FFFFFFFF"
+                        Text="--" />
+                </StackPanel>
+                <StackPanel Margin="0,6,0,0" Orientation="Horizontal">
+                    <TextBlock
+                        Width="80"
+                        VerticalAlignment="Center"
+                        FontSize="12"
+                        Foreground="#AAFFFFFF"
+                        Text="Deck 2 Vol:" />
+                    <TextBlock
+                        x:Name="Deck2VolumeText"
+                        Width="50"
+                        VerticalAlignment="Center"
+                        FontSize="12"
+                        Foreground="#FFFFFFFF"
+                        Text="--" />
+                </StackPanel>
+            </StackPanel>
+        </StackPanel>
+
+        <!--  Measure/beat pixel-tracking capture + readouts - hidden again
+              now that it's tuned; the capture/detection in
+              _topCaptureTimer.Tick keeps running regardless.  -->
+        <StackPanel
+            Grid.Row="4"
+            Margin="24,4,24,8"
+            HorizontalAlignment="Center"
+            Orientation="Horizontal"
+            Visibility="Collapsed">
+            <Border
+                Background="#FF040404"
+                BorderBrush="#22FFFFFF"
+                BorderThickness="1"
+                CornerRadius="4">
+                <Grid Width="30" Height="40">
+                    <Image
+                        x:Name="TopCaptureImage"
+                        Stretch="Uniform" />
+
+                    <!--  Deck 1 marker: 1px dot, 1px up and 1px left of the box's center (15,20) -> (14,19), then nudged 2px further left.  -->
+                    <Rectangle
+                        Width="1"
+                        Height="1"
+                        Margin="13,18,0,0"
+                        HorizontalAlignment="Left"
+                        VerticalAlignment="Top"
+                        Fill="#FF00FF00"
+                        IsHitTestVisible="False" />
+
+                    <!--  Deck 2 marker: same spot, 5px further down.  -->
+                    <Rectangle
+                        Width="1"
+                        Height="1"
+                        Margin="13,23,0,0"
+                        HorizontalAlignment="Left"
+                        VerticalAlignment="Top"
+                        Fill="#FFFFFF00"
+                        IsHitTestVisible="False" />
+                </Grid>
+            </Border>
+
+            <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal">
+                    <Rectangle
+                        x:Name="Deck1MarkerIndicator"
+                        Width="14"
+                        Height="14"
+                        Margin="0,0,8,0"
+                        Fill="#FF444444"
+                        Stroke="#22FFFFFF"
+                        StrokeThickness="1" />
+                    <TextBlock
+                        x:Name="Deck1MarkerText"
+                        VerticalAlignment="Center"
+                        FontSize="12"
+                        Foreground="#AAFFFFFF"
+                        Text="--" />
+
+                    <!--  The literal color sampled under the dot, not just the exact-match check above.  -->
+                    <Rectangle
+                        x:Name="Deck1ColorSwatch"
+                        Width="14"
+                        Height="14"
+                        Margin="16,0,8,0"
+                        Fill="#FF444444"
+                        Stroke="#22FFFFFF"
+                        StrokeThickness="1" />
+                    <TextBlock
+                        x:Name="Deck1ColorText"
+                        VerticalAlignment="Center"
+                        FontSize="12"
+                        Foreground="#AAFFFFFF"
+                        Text="--" />
+
+                    <!--  Increments once per rising edge into #3F0000 - see MainWindow's _topCaptureTimer.Tick.  -->
+                    <TextBlock
+                        x:Name="Deck1MeasureText"
+                        Margin="16,0,0,0"
+                        VerticalAlignment="Center"
+                        FontSize="12"
+                        Foreground="#AAFFFFFF"
+                        Text="Deck 1 measures: 0" />
+                </StackPanel>
+
+                <StackPanel Margin="0,6,0,0" Orientation="Horizontal">
+                    <Rectangle
+                        x:Name="Deck2MarkerIndicator"
+                        Width="14"
+                        Height="14"
+                        Margin="0,0,8,0"
+                        Fill="#FF444444"
+                        Stroke="#22FFFFFF"
+                        StrokeThickness="1" />
+                    <TextBlock
+                        x:Name="Deck2MarkerText"
+                        VerticalAlignment="Center"
+                        FontSize="12"
+                        Foreground="#AAFFFFFF"
+                        Text="--" />
+
+                    <Rectangle
+                        x:Name="Deck2ColorSwatch"
+                        Width="14"
+                        Height="14"
+                        Margin="16,0,8,0"
+                        Fill="#FF444444"
+                        Stroke="#22FFFFFF"
+                        StrokeThickness="1" />
+                    <TextBlock
+                        x:Name="Deck2ColorText"
+                        VerticalAlignment="Center"
+                        FontSize="12"
+                        Foreground="#AAFFFFFF"
+                        Text="--" />
+
+                    <TextBlock
+                        x:Name="Deck2MeasureText"
+                        Margin="16,0,0,0"
+                        VerticalAlignment="Center"
+                        FontSize="12"
+                        Foreground="#AAFFFFFF"
+                        Text="Deck 2 measures: 0" />
+                </StackPanel>
+            </StackPanel>
+        </StackPanel>
+
+        <!--  30x30 captures right below the bottom-right corner of the BPM
+              capture box above (see MainWindow's _cornerCapture/
+              _deck2CornerCapture, positioned from _topCapture's own
+              OriginX/OriginY/Width/Height) - each deck's playing/paused
+              indicator, stacked so they don't overlap.  -->
+        <StackPanel Grid.Row="5" Margin="24,4,24,8" HorizontalAlignment="Center" Visibility="Collapsed">
+            <StackPanel Orientation="Horizontal">
+                <Border
+                    Background="#FF040404"
+                    BorderBrush="#22FFFFFF"
+                    BorderThickness="1"
+                    CornerRadius="4">
+                    <Image
+                        x:Name="CornerCaptureImage"
+                        Width="30"
+                        Height="30"
+                        Stretch="Uniform" />
+                </Border>
+
+                <!--  Color of the pixel at the middle of the box (15,15) - see MainWindow's _cornerCaptureTimer.Tick.  -->
+                <StackPanel Margin="12,0,0,0" VerticalAlignment="Center" Orientation="Horizontal">
+                    <Rectangle
+                        x:Name="CornerCaptureColorSwatch"
+                        Width="14"
+                        Height="14"
+                        Margin="0,0,8,0"
+                        Fill="#FF444444"
+                        Stroke="#22FFFFFF"
+                        StrokeThickness="1" />
+                    <TextBlock
+                        x:Name="CornerCaptureColorText"
+                        VerticalAlignment="Center"
+                        FontSize="12"
+                        Foreground="#AAFFFFFF"
+                        Text="--" />
+
+                    <!--  #575757 = playing, anything else = paused - see MainWindow's _cornerCaptureTimer.Tick.  -->
+                    <TextBlock
+                        x:Name="Deck1PlaybackStatusText"
+                        Margin="16,0,0,0"
+                        VerticalAlignment="Center"
+                        FontSize="12"
+                        Foreground="#AAFFFFFF"
+                        Text="Deck 1: --" />
+                </StackPanel>
+            </StackPanel>
+
+            <StackPanel Margin="0,6,0,0" Orientation="Horizontal">
+                <Border
+                    Background="#FF040404"
+                    BorderBrush="#22FFFFFF"
+                    BorderThickness="1"
+                    CornerRadius="4">
+                    <Image
+                        x:Name="Deck2CornerCaptureImage"
+                        Width="30"
+                        Height="30"
+                        Stretch="Uniform" />
+                </Border>
+
+                <StackPanel Margin="12,0,0,0" VerticalAlignment="Center" Orientation="Horizontal">
+                    <Rectangle
+                        x:Name="Deck2CornerCaptureColorSwatch"
+                        Width="14"
+                        Height="14"
+                        Margin="0,0,8,0"
+                        Fill="#FF444444"
+                        Stroke="#22FFFFFF"
+                        StrokeThickness="1" />
+                    <TextBlock
+                        x:Name="Deck2CornerCaptureColorText"
+                        VerticalAlignment="Center"
+                        FontSize="12"
+                        Foreground="#AAFFFFFF"
+                        Text="--" />
+
+                    <TextBlock
+                        x:Name="Deck2PlaybackStatusText"
+                        Margin="16,0,0,0"
+                        VerticalAlignment="Center"
+                        FontSize="12"
+                        Foreground="#AAFFFFFF"
+                        Text="Deck 2: --" />
+                </StackPanel>
+            </StackPanel>
+        </StackPanel>
 
         <!--  Grid is sized larger than the Viewbox's available space on
               purpose - Stretch="Uniform" scales (and centers) it down to
               fit, so enlarging this logical canvas shrinks every lighting
               effect GUI proportionally without needing to touch each one
               individually.  -->
-        <Viewbox Grid.Row="4" Margin="24" Stretch="Uniform">
+        <Viewbox Grid.Row="6" Margin="24" Stretch="Uniform">
             <Grid Width="1500" Height="813">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -297,5 +743,437 @@
                 </StackPanel>
             </Grid>
         </Viewbox>
+
+        <!--  Placeholder for the 8-fader MIDI board (not yet purchased) -
+              one wide/short box per fader, shifted toward the right with the
+              page-selector buttons to their left. The bottom 6px of each box
+              is a 2-segment progress bar (filled/unfilled, star-sized off
+              Value/RemainingValue so it always fills the box's actual width
+              regardless of window size). Nothing feeds MidiFader.Value from
+              real hardware yet, and the page buttons don't switch anything
+              yet either - each fader page (bass, buildup, laser, LED strip,
+              combo) is future work.  -->
+        <Grid Grid.Row="7" Margin="24,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="16" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <!--  Which set of fader mappings is active - purely a page
+                  selector for now, nothing behind these pages is wired up
+                  yet. See MainWindow.SelectFaderPage. No Margin on the
+                  buttons themselves - HorizontalAlignment/VerticalAlignment
+                  Center keeps the gap between them even regardless of each
+                  button's own content width, since UniformGrid always gives
+                  every cell the same size.  -->
+            <UniformGrid
+                Grid.Column="0"
+                Columns="2"
+                Rows="2"
+                VerticalAlignment="Center">
+                <ui:Button
+                    x:Name="FaderPageBassButton"
+                    Margin="0,4"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Content="Bass"
+                    Click="FaderPageButton_Click" />
+                <ui:Button
+                    x:Name="FaderPageLaserButton"
+                    Margin="0,4"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Content="Laser"
+                    Click="FaderPageButton_Click" />
+                <ui:Button
+                    x:Name="FaderPageLedStripButton"
+                    Margin="0,4"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Content="LED Strip"
+                    Click="FaderPageButton_Click" />
+                <ui:Button
+                    x:Name="FaderPageComboButton"
+                    Margin="0,4"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Content="Combo"
+                    Click="FaderPageButton_Click" />
+            </UniformGrid>
+
+            <!--  ItemsSource is set from code-behind (MainWindow.SelectFaderPage) rather
+                  than bound here, since it needs to swap between Rig.BassFaders/
+                  LaserFaders/LedStripFaders/ComboFaders as the page selection changes.  -->
+            <ItemsControl x:Name="FaderItemsControl" Grid.Column="2">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <UniformGrid Columns="8" Rows="1" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <!--  Border outline reads as this fader's own "is it
+                              active" indicator too: the same translucent
+                              gray as everywhere else while Value is 0,
+                              brightening once it's activated at all - see
+                              FaderActivationToBrushConverter.  -->
+                        <Border
+                            Height="64"
+                            Margin="6,0"
+                            Background="#FF040404"
+                            BorderBrush="{Binding Value, Converter={StaticResource FaderActivationToBrushConverter}}"
+                            BorderThickness="1"
+                            CornerRadius="4">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="6" />
+                                </Grid.RowDefinitions>
+
+                                <!--  Mini icon of the wall striplight + 4 wall par lights - what fader
+                                      1's effect (see MainWindow.UpdateBassFaderEffect) actually controls.
+                                      Same activation-based coloring as the border above - gray at 0%,
+                                      bright once activated. Only fader 1 has an effect defined yet, so
+                                      only its box gets one.  -->
+                                <StackPanel
+                                    Grid.Row="0"
+                                    Margin="5,5,0,0"
+                                    HorizontalAlignment="Left"
+                                    VerticalAlignment="Top">
+                                    <StackPanel.Style>
+                                        <Style TargetType="StackPanel">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <MultiDataTrigger>
+                                                    <MultiDataTrigger.Conditions>
+                                                        <Condition Binding="{Binding Index}" Value="1" />
+                                                        <Condition Binding="{Binding Page}" Value="Bass" />
+                                                    </MultiDataTrigger.Conditions>
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </MultiDataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </StackPanel.Style>
+                                    <Rectangle
+                                        Width="40"
+                                        Height="7"
+                                        Margin="0,0,0,4"
+                                        HorizontalAlignment="Center"
+                                        Fill="{Binding Value, Converter={StaticResource FaderActivationToBrushConverter}}"
+                                        RadiusX="2"
+                                        RadiusY="2" />
+
+                                    <!--  Top pair spread wide, bottom pair close together - same
+                                          asymmetry as the real wall par light layout in the main GUI.  -->
+                                    <StackPanel HorizontalAlignment="Center" Orientation="Horizontal">
+                                        <Polygon
+                                            Width="20"
+                                            Height="16"
+                                            Margin="0,0,8,0"
+                                            Fill="{Binding Value, Converter={StaticResource FaderActivationToBrushConverter}}"
+                                            Points="{StaticResource HexagonPoints}"
+                                            Stretch="Fill" />
+                                        <Polygon
+                                            Width="20"
+                                            Height="16"
+                                            Margin="8,0,0,0"
+                                            Fill="{Binding Value, Converter={StaticResource FaderActivationToBrushConverter}}"
+                                            Points="{StaticResource HexagonPoints}"
+                                            Stretch="Fill" />
+                                    </StackPanel>
+                                    <StackPanel Margin="0,3,0,0" HorizontalAlignment="Center" Orientation="Horizontal">
+                                        <Polygon
+                                            Width="20"
+                                            Height="16"
+                                            Margin="0,0,2,0"
+                                            Fill="{Binding Value, Converter={StaticResource FaderActivationToBrushConverter}}"
+                                            Points="{StaticResource HexagonPoints}"
+                                            Stretch="Fill" />
+                                        <Polygon
+                                            Width="20"
+                                            Height="16"
+                                            Margin="2,0,0,0"
+                                            Fill="{Binding Value, Converter={StaticResource FaderActivationToBrushConverter}}"
+                                            Points="{StaticResource HexagonPoints}"
+                                            Stretch="Fill" />
+                                    </StackPanel>
+                                </StackPanel>
+
+                                <!--  Mini icon for fader 2's effect (see MainWindow.UpdateDiagonalFaderEffect):
+                                      same hexagons as fader 1's icon, no light bar. Top-left/bottom-right
+                                      diagonal filled solid, the other diagonal outlined only - same
+                                      filled-vs-outlined convention as fader 3's icon.  -->
+                                <StackPanel
+                                    Grid.Row="0"
+                                    Margin="5,5,0,0"
+                                    HorizontalAlignment="Left"
+                                    VerticalAlignment="Top">
+                                    <StackPanel.Style>
+                                        <Style TargetType="StackPanel">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <MultiDataTrigger>
+                                                    <MultiDataTrigger.Conditions>
+                                                        <Condition Binding="{Binding Index}" Value="2" />
+                                                        <Condition Binding="{Binding Page}" Value="Bass" />
+                                                    </MultiDataTrigger.Conditions>
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </MultiDataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </StackPanel.Style>
+                                    <StackPanel HorizontalAlignment="Center" Orientation="Horizontal">
+                                        <!--  Top-left: filled (this diagonal).  -->
+                                        <Polygon
+                                            Width="20"
+                                            Height="16"
+                                            Margin="0,0,8,0"
+                                            Fill="{Binding Value, Converter={StaticResource FaderActivationToBrushConverter}}"
+                                            Points="{StaticResource HexagonPoints}"
+                                            Stretch="Fill" />
+                                        <!--  Top-right: outlined (the other diagonal).  -->
+                                        <Polygon
+                                            Width="20"
+                                            Height="16"
+                                            Margin="8,0,0,0"
+                                            Fill="Transparent"
+                                            Points="{StaticResource HexagonPoints}"
+                                            Stretch="Fill"
+                                            Stroke="{Binding Value, Converter={StaticResource FaderActivationToBrushConverter}}"
+                                            StrokeThickness="1.5" />
+                                    </StackPanel>
+                                    <StackPanel Margin="0,3,0,0" HorizontalAlignment="Center" Orientation="Horizontal">
+                                        <!--  Bottom-left: outlined (the other diagonal).  -->
+                                        <Polygon
+                                            Width="20"
+                                            Height="16"
+                                            Margin="0,0,2,0"
+                                            Fill="Transparent"
+                                            Points="{StaticResource HexagonPoints}"
+                                            Stretch="Fill"
+                                            Stroke="{Binding Value, Converter={StaticResource FaderActivationToBrushConverter}}"
+                                            StrokeThickness="1.5" />
+                                        <!--  Bottom-right: filled (this diagonal).  -->
+                                        <Polygon
+                                            Width="20"
+                                            Height="16"
+                                            Margin="2,0,0,0"
+                                            Fill="{Binding Value, Converter={StaticResource FaderActivationToBrushConverter}}"
+                                            Points="{StaticResource HexagonPoints}"
+                                            Stretch="Fill" />
+                                    </StackPanel>
+                                </StackPanel>
+
+                                <!--  Mini icon for fader 3's effect (see MainWindow.UpdateTopBottomFaderEffect):
+                                      same 4-hexagon layout as fader 1's icon, no light bar, bottom pair
+                                      outlined only (not filled) to distinguish it from the top pair.  -->
+                                <StackPanel
+                                    Grid.Row="0"
+                                    Margin="5,5,0,0"
+                                    HorizontalAlignment="Left"
+                                    VerticalAlignment="Top">
+                                    <StackPanel.Style>
+                                        <Style TargetType="StackPanel">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <MultiDataTrigger>
+                                                    <MultiDataTrigger.Conditions>
+                                                        <Condition Binding="{Binding Index}" Value="3" />
+                                                        <Condition Binding="{Binding Page}" Value="Bass" />
+                                                    </MultiDataTrigger.Conditions>
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </MultiDataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </StackPanel.Style>
+                                    <StackPanel HorizontalAlignment="Center" Orientation="Horizontal">
+                                        <Polygon
+                                            Width="20"
+                                            Height="16"
+                                            Margin="0,0,8,0"
+                                            Fill="{Binding Value, Converter={StaticResource FaderActivationToBrushConverter}}"
+                                            Points="{StaticResource HexagonPoints}"
+                                            Stretch="Fill" />
+                                        <Polygon
+                                            Width="20"
+                                            Height="16"
+                                            Margin="8,0,0,0"
+                                            Fill="{Binding Value, Converter={StaticResource FaderActivationToBrushConverter}}"
+                                            Points="{StaticResource HexagonPoints}"
+                                            Stretch="Fill" />
+                                    </StackPanel>
+                                    <StackPanel Margin="0,3,0,0" HorizontalAlignment="Center" Orientation="Horizontal">
+                                        <Polygon
+                                            Width="20"
+                                            Height="16"
+                                            Margin="0,0,2,0"
+                                            Fill="Transparent"
+                                            Points="{StaticResource HexagonPoints}"
+                                            Stretch="Fill"
+                                            Stroke="{Binding Value, Converter={StaticResource FaderActivationToBrushConverter}}"
+                                            StrokeThickness="1.5" />
+                                        <Polygon
+                                            Width="20"
+                                            Height="16"
+                                            Margin="2,0,0,0"
+                                            Fill="Transparent"
+                                            Points="{StaticResource HexagonPoints}"
+                                            Stretch="Fill"
+                                            Stroke="{Binding Value, Converter={StaticResource FaderActivationToBrushConverter}}"
+                                            StrokeThickness="1.5" />
+                                    </StackPanel>
+                                </StackPanel>
+
+                                <!--  Mini icon for fader 4's effect (see MainWindow.UpdateLightBarFaderEffect):
+                                      just the light bar, with a small arrow to its left pointing right -
+                                      same "facing forward" arrow glyph used for the real wall striplight
+                                      in the main GUI, just static (this effect always aims it at 0deg).  -->
+                                <StackPanel
+                                    Grid.Row="0"
+                                    Margin="5,5,0,0"
+                                    HorizontalAlignment="Left"
+                                    VerticalAlignment="Top"
+                                    Orientation="Horizontal">
+                                    <StackPanel.Style>
+                                        <Style TargetType="StackPanel">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <MultiDataTrigger>
+                                                    <MultiDataTrigger.Conditions>
+                                                        <Condition Binding="{Binding Index}" Value="4" />
+                                                        <Condition Binding="{Binding Page}" Value="Bass" />
+                                                    </MultiDataTrigger.Conditions>
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </MultiDataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </StackPanel.Style>
+                                    <Path
+                                        Width="8"
+                                        Height="8"
+                                        Margin="0,0,4,0"
+                                        VerticalAlignment="Center"
+                                        Data="M 0,0 L 8,4 L 0,8 Z"
+                                        Fill="{Binding Value, Converter={StaticResource FaderActivationToBrushConverter}}" />
+                                    <Rectangle
+                                        Width="40"
+                                        Height="7"
+                                        VerticalAlignment="Center"
+                                        Fill="{Binding Value, Converter={StaticResource FaderActivationToBrushConverter}}"
+                                        RadiusX="2"
+                                        RadiusY="2" />
+                                </StackPanel>
+
+                                <!--  Mini icon for fader 5's effect (see MainWindow.UpdateLightBarDownFaderEffect):
+                                      same as fader 4's icon, just the arrow rotated to point down (this
+                                      effect always aims the striplight at 90deg instead of 0deg).  -->
+                                <StackPanel
+                                    Grid.Row="0"
+                                    Margin="5,5,0,0"
+                                    HorizontalAlignment="Left"
+                                    VerticalAlignment="Top"
+                                    Orientation="Horizontal">
+                                    <StackPanel.Style>
+                                        <Style TargetType="StackPanel">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <MultiDataTrigger>
+                                                    <MultiDataTrigger.Conditions>
+                                                        <Condition Binding="{Binding Index}" Value="5" />
+                                                        <Condition Binding="{Binding Page}" Value="Bass" />
+                                                    </MultiDataTrigger.Conditions>
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </MultiDataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </StackPanel.Style>
+                                    <Path
+                                        Width="8"
+                                        Height="8"
+                                        Margin="0,0,4,0"
+                                        VerticalAlignment="Center"
+                                        Data="M 0,0 L 8,4 L 0,8 Z"
+                                        Fill="{Binding Value, Converter={StaticResource FaderActivationToBrushConverter}}">
+                                        <Path.RenderTransform>
+                                            <RotateTransform Angle="90" CenterX="4" CenterY="4" />
+                                        </Path.RenderTransform>
+                                    </Path>
+                                    <Rectangle
+                                        Width="40"
+                                        Height="7"
+                                        VerticalAlignment="Center"
+                                        Fill="{Binding Value, Converter={StaticResource FaderActivationToBrushConverter}}"
+                                        RadiusX="2"
+                                        RadiusY="2" />
+                                </StackPanel>
+
+                                <!--  How many beats apart this fader's effect fires (1 = every beat) - not wired to any actual triggering yet. See MidiFader.BeatInterval.  -->
+                                <TextBlock
+                                    Grid.Row="0"
+                                    Margin="0,2,6,0"
+                                    HorizontalAlignment="Right"
+                                    VerticalAlignment="Top"
+                                    FontSize="18"
+                                    FontWeight="SemiBold"
+                                    Foreground="#AAFFFFFF"
+                                    Text="{Binding BeatIntervalLabel}" />
+
+                                <!--  Shown while this fader is invalidated - forced to 0% because it
+                                      conflicted with another fader effect that just activated (see
+                                      MainWindow.RegisterConflict/MidiFader.Invalidate). Stays lit until
+                                      the real fader is physically moved back to 0%, matching the
+                                      virtual value already sitting there. The "!" is just text colored
+                                      the same as the box background, reading as a cutout rather than an
+                                      overlay against the solid red circle behind it.  -->
+                                <Grid
+                                    Grid.Row="0"
+                                    Width="14"
+                                    Height="14"
+                                    Margin="0,26,6,0"
+                                    HorizontalAlignment="Right"
+                                    VerticalAlignment="Top"
+                                    Visibility="{Binding IsInvalidated, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                    <Ellipse Fill="#FFCC0000" />
+                                    <TextBlock
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Center"
+                                        FontSize="10"
+                                        FontWeight="Bold"
+                                        Foreground="#FF040404"
+                                        Text="!" />
+                                </Grid>
+
+                                <Grid Grid.Row="1">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="{Binding Value, Converter={StaticResource DoubleToStarGridLengthConverter}}" />
+                                        <ColumnDefinition Width="{Binding RemainingValue, Converter={StaticResource DoubleToStarGridLengthConverter}}" />
+                                    </Grid.ColumnDefinitions>
+                                    <Rectangle Grid.Column="0" Fill="#FF00AEEF" />
+                                    <Rectangle Grid.Column="1" Fill="#FF040404" />
+                                </Grid>
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </Grid>
+
+        <!--  Full monitor width, 150px tall (source), starting 150px down
+              from the monitor's own top edge (see MainWindow's
+              _fullWidthCapture) - docked at the very bottom of the app
+              window, stretched to the window's own width.  -->
+        <Border
+            Grid.Row="8"
+            Margin="0"
+            Background="#FF040404"
+            BorderBrush="#22FFFFFF"
+            BorderThickness="1,1,1,0"
+            CornerRadius="0">
+            <Image
+                x:Name="FullWidthCaptureImage"
+                Height="150"
+                Stretch="Fill" />
+        </Border>
     </Grid>
 </ui:FluentWindow>

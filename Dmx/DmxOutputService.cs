@@ -56,8 +56,14 @@ public sealed class DmxOutputService : IDisposable
     // - once they're persistent enough to mean the device is actually gone.
     private const int MaxConsecutiveFailures = 30;
 
+    // How often the sender loop re-enumerates FTDI devices to confirm the
+    // one it opened is still physically plugged in - see SenderLoop's own
+    // comment on why write failures alone don't reliably catch this.
+    private const int DevicePresenceCheckIntervalMs = 1000;
+
     private readonly DmxUniverse _universe;
     private IntPtr _handle = IntPtr.Zero;
+    private string? _connectedSerialNumber;
     private Thread? _senderThread;
     private volatile bool _running;
 
@@ -112,6 +118,7 @@ public sealed class DmxOutputService : IDisposable
         }
 
         _handle = handle;
+        _connectedSerialNumber = serialNumber;
         _running = true;
 
         _senderThread = new Thread(SenderLoop) { IsBackground = true, Name = "DMX Sender", Priority = ThreadPriority.Highest };
@@ -129,18 +136,40 @@ public sealed class DmxOutputService : IDisposable
             FT_Close(_handle);
             _handle = IntPtr.Zero;
         }
+
+        _connectedSerialNumber = null;
     }
 
     private void SenderLoop()
     {
         var handle = _handle;
-        if (handle == IntPtr.Zero)
+        var serialNumber = _connectedSerialNumber;
+        if (handle == IntPtr.Zero || serialNumber is null)
             return;
 
         var consecutiveFailures = 0;
+        var lastDevicePresenceCheck = DateTime.UtcNow;
 
         while (_running)
         {
+            // A physically unplugged FTDI device doesn't reliably surface as
+            // a write/IO error on the open handle - the D2XX driver can keep
+            // returning success on a stale handle for a while, which left
+            // the write-failure counter below never actually tripping on a
+            // real unplug. Re-enumerating and checking this device is still
+            // in the list is what actually catches that.
+            var now = DateTime.UtcNow;
+            if ((now - lastDevicePresenceCheck).TotalMilliseconds >= DevicePresenceCheckIntervalMs)
+            {
+                lastDevicePresenceCheck = now;
+                if (Array.IndexOf(GetAvailablePorts(), serialNumber) < 0)
+                {
+                    _running = false;
+                    ConnectionLost?.Invoke(this, new InvalidOperationException($"Device '{serialNumber}' is no longer present."));
+                    return;
+                }
+            }
+
             try
             {
                 ThrowIfFailed(FT_SetBreakOn(handle), nameof(FT_SetBreakOn));

@@ -29,12 +29,25 @@ public sealed class ParLightDmxBinder
     private const int BottomRightBaseChannel = 77;
     private const int TopRightBaseChannel = 84;
 
+    // Matches the physical address dials set on the 4 real wall par
+    // fixtures - same 7-channel layout as the floor pars, but addressed
+    // lower (1-62) to stay clear of the laser's 34-channel block (15-48).
+    private const int WallTopRightBaseChannel = 1;
+    private const int WallBottomRightBaseChannel = 8;
+    private const int WallBottomLeftBaseChannel = 49;
+    private const int WallTopLeftBaseChannel = 56;
+
     public ParLightDmxBinder(LightingRig rig, DmxUniverse universe)
     {
         Bind(rig.FloorTopLeftPar, TopLeftBaseChannel, universe);
         Bind(rig.FloorBottomLeftPar, BottomLeftBaseChannel, universe);
         Bind(rig.FloorBottomRightPar, BottomRightBaseChannel, universe);
         Bind(rig.FloorTopRightPar, TopRightBaseChannel, universe);
+
+        Bind(rig.TopRightPar, WallTopRightBaseChannel, universe);
+        Bind(rig.BottomRightPar, WallBottomRightBaseChannel, universe);
+        Bind(rig.BottomLeftPar, WallBottomLeftBaseChannel, universe);
+        Bind(rig.TopLeftPar, WallTopLeftBaseChannel, universe);
     }
 
     private static void Bind(ParLight light, int baseChannel, DmxUniverse universe)

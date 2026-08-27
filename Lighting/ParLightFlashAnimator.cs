@@ -15,7 +15,8 @@ public sealed class ParLightFlashAnimator
     private const double SnapThreshold = 1.0;
 
     private readonly IReadOnlyList<ParLight> _lights;
-    private readonly double _decaySeconds;
+    private readonly double _defaultDecaySeconds;
+    private double _decaySeconds;
 
     private DateTime _lastFrameTime;
     private bool _isRunning;
@@ -25,17 +26,23 @@ public sealed class ParLightFlashAnimator
     public ParLightFlashAnimator(IReadOnlyList<ParLight> lights, double decaySeconds)
     {
         _lights = lights;
+        _defaultDecaySeconds = decaySeconds;
         _decaySeconds = decaySeconds;
     }
 
-    public void FlashAll() => Flash(_lights);
+    public void FlashAll(double? decaySeconds = null) => Flash(_lights, decaySeconds);
 
     /// <summary>
     /// Flashes only the given subset of lights (the rest are left alone -
     /// still decaying toward black if they were already mid-flash).
+    /// <paramref name="decaySeconds"/> overrides the constructor's default
+    /// for this flash only - e.g. a fader-driven effect scaling its own
+    /// decay to the current beat interval instead of a fixed rate.
     /// </summary>
-    public void Flash(IEnumerable<ParLight> lights)
+    public void Flash(IEnumerable<ParLight> lights, double? decaySeconds = null)
     {
+        _decaySeconds = decaySeconds ?? _defaultDecaySeconds;
+
         foreach (var light in lights)
             light.Color = FlashColor;
 
