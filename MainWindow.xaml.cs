@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -12,6 +13,7 @@ using System.Windows.Threading;
 using AEPiLightingSystem.Audio;
 using AEPiLightingSystem.Dmx;
 using AEPiLightingSystem.Lighting;
+using AEPiLightingSystem.Midi;
 using AEPiLightingSystem.Models;
 using Wpf.Ui.Appearance;
 using Wpf.Ui.Controls;
@@ -26,12 +28,21 @@ public partial class MainWindow : FluentWindow
     private static readonly Color BackgroundColor = Color.FromRgb(0x08, 0x08, 0x08);
 
     private readonly AudioCaptureService _audioCapture = new();
+    private readonly MidiFaderInput _midiFaderInput = new();
+    private readonly LaunchpadInput _launchpadInput = new();
     private readonly ParLightFlashAnimator _parFlashAnimator;
     private readonly ParLightFlashAnimator _wallStripFlashAnimator;
+    private readonly ParLightFlashAnimator _floorParFlashAnimator;
     private readonly WallStripLightRotationAnimator _wallStripRotationAnimator;
-    private readonly LedStripFlashAnimator _stripFlashAnimator;
-    private readonly LedStripLavaLampAnimator _lavaLampAnimator;
+    private readonly LightBarFlashAnimator _lightBarFlashAnimator;
+    private readonly LightBarLavaLampAnimator _lavaLampAnimator;
+    private readonly LightBarAmberAnimator _lightBarAmberAnimator;
+    private readonly LightBarWhiteFlashAnimator _lightBarWhiteFlashAnimator;
+    private readonly LightBarRgbDimmer _lightBarRgbDimmer;
     private readonly LaserFanAnimator _laserAnimator;
+    private readonly LaserSecondEffectAnimator _laserSecondEffectAnimator;
+    private readonly WallParColorCycleAnimator _comboWallColorCycleAnimator;
+    private readonly ComboSweepAnimator _comboSweepAnimator;
     private readonly ParLightPatternSequencer _patternSequencer = new();
     private readonly BasslineActivityTracker _basslineTracker = new();
     private readonly MelodicPassageDetector _melodicPassageDetector = new();
@@ -56,6 +67,7 @@ public partial class MainWindow : FluentWindow
     private readonly ParLightDmxBinder _dmxBinder;
     private readonly WallStripLightDmxBinder _wallStripDmxBinder;
     private readonly LaserDmxBinder _laserDmxBinder;
+    private readonly CeilingLightBarDmxBinder _lightBarDmxBinder;
 
     // Live mirror of the center 700x150px of the middle monitor (Rekordbox,
     // fullscreen) - see ScreenMirrorCapture for the monitor/region math. Its
@@ -168,7 +180,6 @@ public partial class MainWindow : FluentWindow
         InitializeComponent();
 
         SelectFaderPage(FaderPageBassButton, FaderPage.Bass);
-        SetLightingMode(LightingMode.Manual, ManualModeButton);
 
         _cornerCapture = ScreenMirrorCapture.AtOrigin(
             width: 30, height: 30,
@@ -196,12 +207,38 @@ public partial class MainWindow : FluentWindow
 
         DataContext = Rig;
 
+        // Runs first every single rendered frame, forever - subscribed here
+        // before any effect animator below ever gets a chance to (and
+        // CompositionTarget.Rendering always invokes subscribers in the
+        // order they were added, regardless of when later ones join) - so
+        // every animator that composites onto a ParLight via
+        // Max(light.Color, ownValue) (ParLightFlashAnimator,
+        // ParLightAmbientAnimator, WallParColorCycleAnimator,
+        // ComboSweepAnimator) is always comparing against a clean black
+        // baseline for *this* frame, not whatever it (or something else)
+        // already wrote last frame. Without this, Max can only ratchet a
+        // channel up, never back down - a decaying flash or a fading-out
+        // combo effect would each freeze at their own historical peak
+        // instead of ever visibly dimming or turning off. Only the lights
+        // that Max-composite need this - the light bars and lasers still
+        // just overwrite their own Color outright, so clearing them here
+        // would fight them instead of helping.
+        CompositionTarget.Rendering += (_, _) => ClearCompositedParLights();
+
         _parFlashAnimator = new ParLightFlashAnimator(Rig.WallParLights, decaySeconds: 0.22);
+        _floorParFlashAnimator = new ParLightFlashAnimator(Rig.FloorParLights, decaySeconds: 0.22);
         _wallStripFlashAnimator = new ParLightFlashAnimator(Rig.WallStripLight.Lights, decaySeconds: 0.22);
         _wallStripRotationAnimator = new WallStripLightRotationAnimator(Rig.WallStripLight);
-        _stripFlashAnimator = new LedStripFlashAnimator(Rig.LedStrips, decaySeconds: 0.35);
-        _lavaLampAnimator = new LedStripLavaLampAnimator(Rig.LedStrips);
+        _lightBarFlashAnimator = new LightBarFlashAnimator(Rig.LightBars, decaySeconds: 0.35);
+        _lavaLampAnimator = new LightBarLavaLampAnimator(Rig.LightBars);
+        _lightBarAmberAnimator = new LightBarAmberAnimator(Rig.LightBars);
+        _lightBarWhiteFlashAnimator = new LightBarWhiteFlashAnimator(Rig.LightBars);
+        _lightBarRgbDimmer = new LightBarRgbDimmer(Rig.LightBars);
         _laserAnimator = new LaserFanAnimator(Rig.Laser);
+        _laserSecondEffectAnimator = new LaserSecondEffectAnimator(Rig.Laser);
+        _comboWallColorCycleAnimator = new WallParColorCycleAnimator(
+            Rig.WallParLights.Concat(Rig.WallStripLight.Lights).ToList());
+        UpdateComboWallCycleDisplayLabel();
 
         // A chord hit only means anything visually if the melodic passage
         // has actually settled into "one sustained chord" by the time it
@@ -218,22 +255,225 @@ public partial class MainWindow : FluentWindow
         _floorBottomLeftAmbientAnimator = new ParLightAmbientAnimator(new[] { Rig.FloorBottomLeftPar });
         _floorBottomRightAmbientAnimator = new ParLightAmbientAnimator(new[] { Rig.FloorBottomRightPar });
 
+        // Sweep order: top-left wall, bottom-left wall, bottom-left floor,
+        // both bottom floors together, bottom-right wall, top-right wall,
+        // striplight - see UpdateComboSweepFaderEffect. Constructed after
+        // the floor ambient animators above since it references them.
+        _comboSweepAnimator = new ComboSweepAnimator(
+            steps:
+            [
+                new[] { Rig.TopLeftPar },
+                new[] { Rig.BottomLeftPar },
+                new[] { Rig.FloorBottomLeftPar },
+                new[] { Rig.FloorBottomLeftPar, Rig.FloorBottomRightPar },
+                new[] { Rig.BottomRightPar },
+                new[] { Rig.TopRightPar },
+                Rig.WallStripLight.Lights,
+            ],
+            stepIsFloorGroup: [false, false, true, true, false, false, false]);
+        UpdateComboSweepDisplayLabel();
+
+        // Needs every animator above to already exist - mode changes push
+        // light-group suppression out to all of them.
+        SetLightingMode(LightingMode.SemiAuto, SemiAutoModeButton);
+
         _dmxOutput = new DmxOutputService(_dmxUniverse);
         _dmxOutput.ConnectionLost += (_, ex) => Dispatcher.BeginInvoke(() => OnDmxConnectionLost(ex));
         _dmxBinder = new ParLightDmxBinder(Rig, _dmxUniverse);
-        _wallStripDmxBinder = new WallStripLightDmxBinder(Rig.WallStripLight, _dmxUniverse, baseChannel: 91);
+        _wallStripDmxBinder = new WallStripLightDmxBinder(Rig, Rig.WallStripLight, _dmxUniverse, baseChannel: 91);
         _laserDmxBinder = new LaserDmxBinder(Rig.Laser, _dmxUniverse, baseChannel: 15);
-
-        // All fixtures default to off; nothing lights up until an effect fires.
-        foreach (var strip in Rig.LedStrips)
-            strip.Fill(Colors.Black);
+        _lightBarDmxBinder = new CeilingLightBarDmxBinder(Rig, _dmxUniverse);
 
         SetupFaderConflicts();
 
-        // TEMP: activating fader 4 while fader 5 (set in LightingRig's own
-        // constructor) is already on, to demonstrate the conflict/
-        // invalidation system live before real hardware is connected.
-        Rig.BassFaders[3].Value = 1.0;
+        // MidiFaderInput fires on its own MIDI thread, so hop back to the UI
+        // thread before touching any MidiFader (its PropertyChanged feeds
+        // WPF bindings, which require the UI thread).
+        _midiFaderInput.FaderChanged += (index, value) =>
+            Dispatcher.BeginInvoke(() => CurrentFaderBank()[index - 1].Value = value);
+
+        // Each fader's knob halves/doubles that fader's own beat interval,
+        // clamped to [1/16, 4] - reversed from the knob's raw turn direction
+        // (a right click nudges the accumulator down, i.e. towards halving)
+        // and requiring KnobClicksPerStep clicks in the same direction
+        // before actually stepping, so a physical click isn't as touchy as a
+        // full halve/double. The same MidiFaderInput thread-hop reasoning as
+        // FaderChanged above applies here too.
+        _midiFaderInput.KnobTurned += (index, direction) => Dispatcher.BeginInvoke(() =>
+        {
+            // The combo wall color cycle's and combo sweep's knobs dial a
+            // smooth duration instead of stepping through the usual beat
+            // fractions - see ApplyComboWallCycleSecondsStep/
+            // ApplyComboSweepCycleSecondsStep.
+            if (CurrentFaderBank()[index - 1] == Rig.ComboFaders[0])
+            {
+                ApplyComboWallCycleSecondsStep(direction);
+                return;
+            }
+
+            if (CurrentFaderBank()[index - 1] == Rig.ComboFaders[1])
+            {
+                ApplyComboSweepCycleSecondsStep(direction);
+                return;
+            }
+
+            var accumulated = _knobClickAccumulator[index] -= direction;
+            if (Math.Abs(accumulated) < KnobClicksPerStep)
+                return;
+
+            _knobClickAccumulator[index] = 0;
+            ApplyBeatIntervalStep(index, accumulated > 0 ? 1 : -1);
+        });
+
+        // The top button of a fader's 4-button column doubles its beat
+        // interval, the bottom button halves it - same clamp range as the
+        // knob, just without the knob's click-accumulator debounce, since a
+        // button press is already a single discrete action.
+        _midiFaderInput.BeatIntervalButtonPressed += (index, direction) =>
+            Dispatcher.BeginInvoke(() => ApplyBeatIntervalStep(index, direction));
+
+        _midiFaderInput.InvalidationResetButtonPressed += index =>
+            Dispatcher.BeginInvoke(() => ResetInvalidatedFader(index));
+
+        HookFaderIndicatorLeds();
+        HookActiveFaderEffectsList();
+        ActiveFaderEffectsItemsControl.ItemsSource = _activeFaderEffects;
+
+        // Row 1 (the top row of the grid itself, not the round control
+        // buttons above it), pads 1-3 (left to right): pick the automation
+        // mode, mirroring the on-screen Full Auto/Semi Auto/Manual buttons -
+        // same SetLightingMode call either way, so both stay in sync no
+        // matter which one is used.
+        _launchpadInput.GridPadChanged += (row, column, pressed) =>
+        {
+            if (row != AutomationModeGridRow || column > 2 || !pressed)
+                return;
+
+            Dispatcher.BeginInvoke(() =>
+            {
+                switch (column)
+                {
+                    case 0:
+                        SetLightingMode(LightingMode.FullAuto, FullAutoModeButton);
+                        break;
+                    case 1:
+                        SetLightingMode(LightingMode.SemiAuto, SemiAutoModeButton);
+                        break;
+                    case 2:
+                        SetLightingMode(LightingMode.Manual, ManualModeButton);
+                        break;
+                }
+            });
+        };
+
+        // Row 1, pads 5-8 (left to right): pick the fader effect page,
+        // mirroring the on-screen page-select buttons - same SelectFaderPage
+        // call either way, so both stay in sync no matter which one is used.
+        _launchpadInput.GridPadChanged += (row, column, pressed) =>
+        {
+            if (row != AutomationModeGridRow || column is < 4 or > 7 || !pressed)
+                return;
+
+            Dispatcher.BeginInvoke(() =>
+            {
+                switch (column)
+                {
+                    case 4:
+                        SelectFaderPage(FaderPageBassButton, FaderPage.Bass);
+                        break;
+                    case 5:
+                        SelectFaderPage(FaderPageLaserButton, FaderPage.Laser);
+                        break;
+                    case 6:
+                        SelectFaderPage(FaderPageLightBarButton, FaderPage.LightBar);
+                        break;
+                    case 7:
+                        SelectFaderPage(FaderPageComboButton, FaderPage.Combo);
+                        break;
+                }
+            });
+        };
+
+        // Row 1, pad 4 (column 3, the gap between the automation-mode and
+        // fader-page pads): selects the Global page - fixture-wide controls
+        // (see UpdateGlobalBrightnessFaderEffect), deliberately not exposed
+        // as an on-screen page-select button, only reachable from here.
+        _launchpadInput.GridPadChanged += (row, column, pressed) =>
+        {
+            if (row != AutomationModeGridRow || column != 3 || !pressed)
+                return;
+
+            Dispatcher.BeginInvoke(() => SelectFaderPage(null, FaderPage.Global));
+        };
+
+        // Row 2 (one below the automation-mode/fader-page row), pads 6-8:
+        // bulk-invalidate whichever active fader effects the pad names -
+        // reuses the same _activeFaderEffects list the strip above the
+        // fader boxes is built from. Snapshot with ToList() first, since
+        // MidiFader.Invalidate() removes itself from that live collection
+        // as a side effect (see UpdateActiveFaderEffectsList), which would
+        // otherwise break enumeration mid-loop.
+        _launchpadInput.GridPadChanged += (row, column, pressed) =>
+        {
+            if (row != SecondGridRow || column is < 5 or > 7 || !pressed)
+                return;
+
+            Dispatcher.BeginInvoke(() =>
+            {
+                var toInvalidate = column switch
+                {
+                    5 => _activeFaderEffects.ToList(),
+                    6 => _activeFaderEffects.Where(f => f.Page == _selectedFaderPage).ToList(),
+                    _ => _activeFaderEffects.Where(f => f.Page != _selectedFaderPage).ToList(),
+                };
+
+                foreach (var fader in toInvalidate)
+                    fader.Invalidate();
+            });
+        };
+
+        // Launchpad MK2 palette index 5 is a bright red.
+        const int launchpadRedColor = 5;
+        for (var column = 5; column <= 7; column++)
+            _launchpadInput.SetPadColor(SecondGridRow, column, launchpadRedColor);
+
+        // Row 2, pads 1-4: toggle whether a whole light group is allowed to
+        // do anything at all in Semi Auto/Manual mode - lit white while
+        // enabled (the default), dark while disabled. See
+        // UpdateLightGroupSuppression.
+        _launchpadInput.GridPadChanged += (row, column, pressed) =>
+        {
+            if (row != SecondGridRow || column > 3 || !pressed)
+                return;
+
+            Dispatcher.BeginInvoke(() =>
+            {
+                switch (column)
+                {
+                    case 0:
+                        _wallGroupOverrideEnabled = !_wallGroupOverrideEnabled;
+                        break;
+                    case 1:
+                        _floorGroupOverrideEnabled = !_floorGroupOverrideEnabled;
+                        break;
+                    case 2:
+                        _laserGroupOverrideEnabled = !_laserGroupOverrideEnabled;
+                        break;
+                    case 3:
+                        _lightBarGroupOverrideEnabled = !_lightBarGroupOverrideEnabled;
+                        break;
+                }
+
+                UpdateLightGroupSuppression();
+            });
+        };
+        UpdateLightGroupSuppression();
+
+        // The round control buttons above the grid aren't bound to
+        // anything, so keep them dark rather than whatever the Launchpad's
+        // own firmware defaults them to.
+        for (var i = 0; i < 8; i++)
+            _launchpadInput.SetTopButtonColor(i, 0);
 
         _screenMirrorTimer.Tick += (_, _) =>
         {
@@ -304,6 +544,7 @@ public partial class MainWindow : FluentWindow
             UpdateStatusBanners();
         };
 
+        Loaded += (_, _) => PopulateAudioSources();
         Loaded += (_, _) => StartListening();
         Loaded += (_, _) => TryAutoConnectDmx();
         Loaded += (_, _) => _screenMirrorTimer.Start();
@@ -314,6 +555,8 @@ public partial class MainWindow : FluentWindow
         Loaded += (_, _) => _deck2CornerCaptureTimer.Start();
         Loaded += (_, _) => StartFullWidthCaptureLoop();
         Closed += (_, _) => _audioCapture.Dispose();
+        Closed += (_, _) => _midiFaderInput.Dispose();
+        Closed += (_, _) => _launchpadInput.Dispose();
         Closed += (_, _) => _dmxOutput.Dispose();
         Closed += (_, _) => _screenMirrorTimer.Stop();
         Closed += (_, _) => _narrowMirrorTimer.Stop();
@@ -384,6 +627,14 @@ public partial class MainWindow : FluentWindow
         UpdateTopBottomFaderEffect();
         UpdateLightBarFaderEffect();
         UpdateLightBarDownFaderEffect();
+        UpdateFloorParFaderEffect();
+        UpdateLeftRightFloorParFaderEffect();
+        UpdateFloorParPlusWallTopFaderEffect();
+        UpdateLaserWaveFaderEffect();
+        UpdateLaserSecondFaderEffect();
+        UpdateComboWallColorCycleFaderEffect();
+        UpdateComboSweepFaderEffect();
+        UpdateGlobalBrightnessFaderEffect();
     }
 
     // Reads both deck BPM circles out of whatever the mirror last captured.
@@ -518,6 +769,9 @@ public partial class MainWindow : FluentWindow
     private double? _topBottomFaderLastBucket;
     private double? _lightBarFaderLastBucket;
     private double? _lightBarDownFaderLastBucket;
+    private double? _floorParFaderLastBucket;
+    private double? _leftRightFloorParFaderLastBucket;
+    private double? _floorParPlusWallTopFaderLastBucket;
 
     // Reference point for the flash color's slowly-cycling hue - see
     // UpdateBassFaderEffect. A full rotation every 30 seconds is "slowly."
@@ -573,9 +827,59 @@ public partial class MainWindow : FluentWindow
     // black right before the next one rather than exactly overlapping it.
     private const double BassFlashDecayFraction = 0.9;
 
+    // Range a fader's knob can dial its own beat interval to - see
+    // MidiFaderInput.KnobTurned.
+    private const double MinBeatInterval = 1.0 / 16.0;
+    private const double MaxBeatInterval = 4.0;
+
+    // How many clicks in the same direction a knob needs before its beat
+    // interval actually halves/doubles - index 1-8, index 0 unused.
+    private const int KnobClicksPerStep = 16;
+    private readonly int[] _knobClickAccumulator = new int[9];
+
+    // Shared by the knob and the top/bottom buttons - both just double or
+    // halve the given fader's beat interval, clamped to [1/16, 4].
+    private void ApplyBeatIntervalStep(int faderIndex, int direction)
+    {
+        var fader = CurrentFaderBank()[faderIndex - 1];
+        var newInterval = direction > 0 ? fader.BeatInterval * 2 : fader.BeatInterval / 2;
+        fader.BeatInterval = Math.Clamp(newInterval, MinBeatInterval, MaxBeatInterval);
+    }
+
+    // How many seconds one knob click nudges the combo wall color cycle's
+    // full-loop duration - no accumulator debounce here (every click moves
+    // it), since the point is a smooth, finely-graded dial rather than the
+    // beat-fraction doubling/halving every other fader's knob does.
+    private const double ComboCycleSecondsStepPerClick = 1.0;
+
+    private void ApplyComboWallCycleSecondsStep(int direction)
+    {
+        // Same "right = smaller/faster" sign convention as the reversed
+        // beat-interval knob above, for a consistent feel across faders.
+        _comboWallColorCycleAnimator.CycleSeconds -= direction * ComboCycleSecondsStepPerClick;
+        UpdateComboWallCycleDisplayLabel();
+    }
+
+    private void UpdateComboWallCycleDisplayLabel() =>
+        Rig.ComboFaders[0].CustomDisplayLabel = $"{_comboWallColorCycleAnimator.CycleSeconds:0}s";
+
+    // Same "right = smaller/faster" sign convention and no-accumulator
+    // smooth feel as ApplyComboWallCycleSecondsStep, just for the sweep's
+    // own [1, 60] range instead.
+    private const double ComboSweepSecondsStepPerClick = 1.0;
+
+    private void ApplyComboSweepCycleSecondsStep(int direction)
+    {
+        _comboSweepAnimator.CycleSeconds -= direction * ComboSweepSecondsStepPerClick;
+        UpdateComboSweepDisplayLabel();
+    }
+
+    private void UpdateComboSweepDisplayLabel() =>
+        Rig.ComboFaders[1].CustomDisplayLabel = $"{_comboSweepAnimator.CycleSeconds:0}s";
+
     private void UpdateBassFaderEffect()
     {
-        if (!ManualEffectsEnabled || _selectedFaderPage != FaderPage.Bass)
+        if (!ManualEffectsEnabled)
             return;
 
         var fader = Rig.BassFaders[0];
@@ -620,17 +924,27 @@ public partial class MainWindow : FluentWindow
     private void UpdateLightBarDownFaderEffect() =>
         UpdateLightBarFaderEffect(Rig.BassFaders[4], ref _lightBarDownFaderLastBucket, 90.0);
 
-    // Bass faders 4 and 5 both claim the wall striplight's facing angle
-    // (forward vs. straight down) - the physical fixture can only point one
-    // way at once, so whichever one just turned on wins and the other gets
-    // force-zeroed and flagged (MidiFader.Invalidate) until its own real
-    // fader is physically moved back to 0%.
+    // Bass faders 1, 4, and 5 all claim the wall striplight's facing angle
+    // (1 and 4 forward, 5 straight down) - the physical fixture can only
+    // point one way at once, so whichever one just turned on wins and the
+    // other gets force-zeroed and flagged (MidiFader.Invalidate) until its
+    // own real fader is physically moved back to 0%.
     private void SetupFaderConflicts()
     {
+        // Faders 1 and 4 both aim the striplight forward, so they don't
+        // conflict with each other - only with fader 5, which wants it
+        // pointed straight down instead.
+        RegisterConflict(Rig.BassFaders[0], Rig.BassFaders[4]);
         RegisterConflict(Rig.BassFaders[3], Rig.BassFaders[4]);
     }
 
-    private static void RegisterConflict(MidiFader a, MidiFader b)
+    // Which faders conflict with which - populated by RegisterConflict,
+    // consulted by the invalidation-reset button (see
+    // MidiFaderInput.InvalidationResetButtonPressed) to find who to
+    // invalidate in the other direction.
+    private readonly Dictionary<MidiFader, List<MidiFader>> _faderConflicts = new();
+
+    private void RegisterConflict(MidiFader a, MidiFader b)
     {
         a.PropertyChanged += (_, e) =>
         {
@@ -642,11 +956,45 @@ public partial class MainWindow : FluentWindow
             if (e.PropertyName == nameof(MidiFader.Value) && b.Value > 0 && a.Value > 0)
                 a.Invalidate();
         };
+
+        GetOrAddConflictList(a).Add(b);
+        GetOrAddConflictList(b).Add(a);
+    }
+
+    private List<MidiFader> GetOrAddConflictList(MidiFader fader)
+    {
+        if (!_faderConflicts.TryGetValue(fader, out var list))
+            _faderConflicts[fader] = list = new List<MidiFader>();
+
+        return list;
+    }
+
+    // The invalidation-reset button (3rd from the top) on an invalidated
+    // fader: swaps who wins by invalidating whichever conflicting fader is
+    // currently active, then clearing this fader's own invalidation - same
+    // mechanism a real fader move back to 0% already uses (see
+    // MidiFader.Value's setter), just triggered by the button instead.
+    private void ResetInvalidatedFader(int faderIndex)
+    {
+        var fader = CurrentFaderBank()[faderIndex - 1];
+        if (!fader.IsInvalidated)
+            return;
+
+        if (_faderConflicts.TryGetValue(fader, out var conflicts))
+        {
+            foreach (var conflicting in conflicts)
+            {
+                if (conflicting.Value > 0)
+                    conflicting.Invalidate();
+            }
+        }
+
+        fader.Value = 0;
     }
 
     private void UpdateLightBarFaderEffect(MidiFader fader, ref double? lastBucket, double facingAngleDegrees)
     {
-        if (!ManualEffectsEnabled || _selectedFaderPage != FaderPage.Bass)
+        if (!ManualEffectsEnabled)
             return;
 
         if (!ShouldFireFaderEffect(fader, ref lastBucket, out var gapSeconds))
@@ -671,7 +1019,7 @@ public partial class MainWindow : FluentWindow
     // right on one trigger, top-right/bottom-left on the next.
     private void UpdateDiagonalFaderEffect()
     {
-        if (!ManualEffectsEnabled || _selectedFaderPage != FaderPage.Bass)
+        if (!ManualEffectsEnabled)
             return;
 
         var fader = Rig.BassFaders[1];
@@ -696,7 +1044,7 @@ public partial class MainWindow : FluentWindow
     // pairing.
     private void UpdateTopBottomFaderEffect()
     {
-        if (!ManualEffectsEnabled || _selectedFaderPage != FaderPage.Bass)
+        if (!ManualEffectsEnabled)
             return;
 
         var fader = Rig.BassFaders[2];
@@ -714,6 +1062,182 @@ public partial class MainWindow : FluentWindow
         _parFlashAnimator.FlashColor = flashColor;
         _parFlashAnimator.Flash(pair, decaySeconds);
     }
+
+    // The 6th bass fader: flashes all 4 floor par lights together every time
+    // this fader's own beat interval comes around - plain white, no
+    // hue-cycling (unlike faders 1/4/5), matching the plain-white pattern of
+    // the diagonal/top-bottom wall-par effects.
+    private void UpdateFloorParFaderEffect()
+    {
+        if (!ManualEffectsEnabled)
+            return;
+
+        var fader = Rig.BassFaders[5];
+        if (!ShouldFireFaderEffect(fader, ref _floorParFaderLastBucket, out var gapSeconds))
+            return;
+
+        var flashColor = ScaleColor(Colors.White, fader.Value);
+        var decaySeconds = BassFlashDecayFraction * gapSeconds;
+
+        _floorParFlashAnimator.FlashColor = flashColor;
+        _floorParFlashAnimator.FlashAll(decaySeconds);
+    }
+
+    // The 7th bass fader: alternates between the left 2 and right 2 floor
+    // par lights each time this fader's own beat interval comes around -
+    // same alternation mechanism as UpdateDiagonalFaderEffect/
+    // UpdateTopBottomFaderEffect, plain white.
+    private void UpdateLeftRightFloorParFaderEffect()
+    {
+        if (!ManualEffectsEnabled)
+            return;
+
+        var fader = Rig.BassFaders[6];
+        if (!ShouldFireFaderEffect(fader, ref _leftRightFloorParFaderLastBucket, out var gapSeconds))
+            return;
+
+        var flashColor = ScaleColor(Colors.White, fader.Value);
+        var decaySeconds = BassFlashDecayFraction * gapSeconds;
+
+        var isEvenBucket = (long)_leftRightFloorParFaderLastBucket! % 2 == 0;
+        var pair = isEvenBucket
+            ? new[] { Rig.FloorTopLeftPar, Rig.FloorBottomLeftPar }
+            : new[] { Rig.FloorTopRightPar, Rig.FloorBottomRightPar };
+
+        _floorParFlashAnimator.FlashColor = flashColor;
+        _floorParFlashAnimator.Flash(pair, decaySeconds);
+    }
+
+    // The 8th bass fader: same as the 6th (all 4 floor par lights flash
+    // together every beat interval), plus the wall par lights alternate
+    // between the top pair and bottom pair each beat interval - same
+    // alternation mechanism as UpdateTopBottomFaderEffect. The wall pars
+    // only flash to half this fader's activation (e.g. fader at 100% still
+    // only brings them to 50% brightness) so they read as an accent on top
+    // of the floor pars rather than an equal partner.
+    private const double FloorParPlusWallTopWallBrightnessFraction = 0.5;
+
+    private void UpdateFloorParPlusWallTopFaderEffect()
+    {
+        if (!ManualEffectsEnabled)
+            return;
+
+        var fader = Rig.BassFaders[7];
+        if (!ShouldFireFaderEffect(fader, ref _floorParPlusWallTopFaderLastBucket, out var gapSeconds))
+            return;
+
+        var decaySeconds = BassFlashDecayFraction * gapSeconds;
+
+        _floorParFlashAnimator.FlashColor = ScaleColor(Colors.White, fader.Value);
+        _floorParFlashAnimator.FlashAll(decaySeconds);
+
+        var wallFlashColor = ScaleColor(Colors.White, fader.Value * FloorParPlusWallTopWallBrightnessFraction);
+
+        var isEvenBucket = (long)_floorParPlusWallTopFaderLastBucket! % 2 == 0;
+        var wallPair = isEvenBucket
+            ? new[] { Rig.TopLeftPar, Rig.TopRightPar }
+            : new[] { Rig.BottomLeftPar, Rig.BottomRightPar };
+
+        _parFlashAnimator.FlashColor = wallFlashColor;
+        _parFlashAnimator.Flash(wallPair, decaySeconds);
+    }
+
+    // The 1st laser fader: the same wandering-line "wave" effect Full/Semi
+    // Auto drives off melodic-passage detection (see LaserFanAnimator),
+    // just driven by this fader instead - active for as long as it's above
+    // 0%, brightness following its activation the same way every Bass
+    // fader effect's flash color does. Beat interval doesn't mean "fires
+    // every N beats" here, since this isn't a flash - instead it's repurposed
+    // as an animation-speed dial: SpeedFactor is its reciprocal, so a
+    // smaller interval (dialed via the same knob/buttons as every other
+    // fader) animates faster.
+    private void UpdateLaserWaveFaderEffect()
+    {
+        if (!ManualEffectsEnabled)
+            return;
+
+        var fader = Rig.LaserFaders[0];
+        var isActive = fader.Value > 0;
+
+        _laserAnimator.SetActive(isActive);
+        if (!isActive)
+            return;
+
+        _laserAnimator.BrightnessFactor = fader.Value;
+        _laserAnimator.SpeedFactor = 1.0 / fader.BeatInterval;
+    }
+
+    // The 2nd laser fader: independently wanders Rotation/Horizontal
+    // Movement/Vertical Zoom within their own confirmed ranges (see
+    // LaserSecondEffectAnimator/LaserDmxBinder) - every other DMX channel
+    // keeps whatever the 1st laser fader's wave effect already sets.
+    // Same beat-interval-as-speed-dial repurposing as the 1st laser fader.
+    // There's no brightness/dimmer channel to tie to fader.Value here (see
+    // LaserDmxBinder's class summary) - Value only gates on/off.
+    private void UpdateLaserSecondFaderEffect()
+    {
+        if (!ManualEffectsEnabled)
+            return;
+
+        var fader = Rig.LaserFaders[1];
+        var isActive = fader.Value > 0;
+
+        _laserSecondEffectAnimator.SetActive(isActive);
+        if (!isActive)
+            return;
+
+        _laserSecondEffectAnimator.SpeedFactor = 1.0 / fader.BeatInterval;
+    }
+
+    // The 1st combo fader: a "chill" ambient wash on the 4 wall par lights
+    // + wall striplight - no flashes, just a continuous smooth crossfade
+    // looping through a fixed palette (see WallParColorCycleAnimator).
+    // Brightness follows this fader's own activation, the same convention
+    // every other fader effect's color uses.
+    private void UpdateComboWallColorCycleFaderEffect()
+    {
+        if (!ManualEffectsEnabled)
+            return;
+
+        var fader = Rig.ComboFaders[0];
+        var isActive = fader.Value > 0;
+
+        _comboWallColorCycleAnimator.SetActive(isActive);
+        if (!isActive)
+            return;
+
+        Rig.WallStripLight.FacingAngleDegrees = WallStripLight.ForwardAngleDegrees;
+        _comboWallColorCycleAnimator.Brightness = fader.Value;
+    }
+
+    // The 2nd combo fader: a "chill" sweeping chase through the 4 wall par
+    // lights, 2 floor par lights, and the wall striplight (see
+    // ComboSweepAnimator), the color itself also fading through its own
+    // palette. Brightness follows this fader's own activation, the same
+    // convention every other fader effect's color uses.
+    private void UpdateComboSweepFaderEffect()
+    {
+        if (!ManualEffectsEnabled)
+            return;
+
+        var fader = Rig.ComboFaders[1];
+        var isActive = fader.Value > 0;
+
+        _comboSweepAnimator.SetActive(isActive);
+        if (!isActive)
+            return;
+
+        Rig.WallStripLight.FacingAngleDegrees = WallStripLight.ForwardAngleDegrees;
+        _comboSweepAnimator.Brightness = fader.Value;
+    }
+
+    // The 1st Global fader: a ceiling on every light's real output
+    // brightness (see LightingRig.GlobalBrightness and the DMX binders that
+    // actually apply it) - deliberately NOT gated on ManualEffectsEnabled,
+    // since this is meant to affect every light regardless of Full
+    // Auto/Semi Auto/Manual or which effect produced its color.
+    private void UpdateGlobalBrightnessFaderEffect() =>
+        Rig.GlobalBrightness = Rig.GlobalFaders[0].Value;
 
     private static Color ScaleColor(Color color, double factor)
     {
@@ -760,6 +1284,18 @@ public partial class MainWindow : FluentWindow
         return Color.FromRgb(pixel[2], pixel[1], pixel[0]);
     }
 
+    private void ClearCompositedParLights()
+    {
+        foreach (var light in Rig.WallParLights)
+            light.Color = Colors.Black;
+
+        foreach (var light in Rig.FloorParLights)
+            light.Color = Colors.Black;
+
+        foreach (var light in Rig.WallStripLight.Lights)
+            light.Color = Colors.Black;
+    }
+
     private static void PositionRegionOverlay(System.Windows.Shapes.Rectangle overlay, Int32Rect region)
     {
         Canvas.SetLeft(overlay, region.X);
@@ -799,7 +1335,7 @@ public partial class MainWindow : FluentWindow
     }
 
     // Each page is its own independent bank of 8 faders (Rig.BassFaders/
-    // LaserFaders/LedStripFaders/ComboFaders) - only the selected page's
+    // LaserFaders/LightBarFaders/ComboFaders) - only the selected page's
     // bank is ever bound to FaderItemsControl, and only the Bass page has
     // an actual effect wired up yet (see UpdateBassFaderEffect's own guard).
     private Wpf.Ui.Controls.Button? _selectedFaderPageButton;
@@ -812,26 +1348,137 @@ public partial class MainWindow : FluentWindow
 
         var page = button == FaderPageBassButton ? FaderPage.Bass
             : button == FaderPageLaserButton ? FaderPage.Laser
-            : button == FaderPageLedStripButton ? FaderPage.LedStrip
+            : button == FaderPageLightBarButton ? FaderPage.LightBar
             : FaderPage.Combo;
 
         SelectFaderPage(button, page);
     }
 
-    private void SelectFaderPage(Wpf.Ui.Controls.Button button, FaderPage page)
+    // button is null for the Global page - it has no on-screen page-select
+    // button (only reachable via the Launchpad's row-1 pad 4), so there's
+    // no GUI button to highlight; whatever was highlighted before is left
+    // as-is rather than cleared, since it'll pick back up correctly the
+    // next time a real on-screen page button is used.
+    private void SelectFaderPage(Wpf.Ui.Controls.Button? button, FaderPage page)
     {
-        _selectedFaderPageButton?.ClearValue(BackgroundProperty);
-        button.Background = new SolidColorBrush(Color.FromRgb(0x00, 0x5A, 0x9E));
-        _selectedFaderPageButton = button;
+        if (button is not null)
+        {
+            _selectedFaderPageButton?.ClearValue(BackgroundProperty);
+            button.Background = new SolidColorBrush(Color.FromRgb(0x00, 0x5A, 0x9E));
+            _selectedFaderPageButton = button;
+        }
 
         _selectedFaderPage = page;
-        FaderItemsControl.ItemsSource = page switch
+        Rig.SelectedFaderPage = page;
+        FaderItemsControl.ItemsSource = CurrentFaderBank();
+        RefreshFaderIndicatorLeds();
+        UpdateFaderPageLaunchpadColors();
+    }
+
+    // Launchpad grid row 1, pads 5-8 (column 4-7), mirror the on-screen
+    // fader page buttons - same blue/white convention as the automation
+    // mode pads. Pad 4 (column 3) gets the same treatment for the Global
+    // page, even though it has no on-screen button of its own.
+    private void UpdateFaderPageLaunchpadColors()
+    {
+        var selectedColumn = _selectedFaderPage switch
         {
-            FaderPage.Bass => Rig.BassFaders,
-            FaderPage.Laser => Rig.LaserFaders,
-            FaderPage.LedStrip => Rig.LedStripFaders,
-            _ => Rig.ComboFaders,
+            FaderPage.Bass => 4,
+            FaderPage.Laser => 5,
+            FaderPage.LightBar => 6,
+            FaderPage.Combo => 7,
+            _ => 3,
         };
+
+        _launchpadInput.SetPadColor(AutomationModeGridRow, 3, selectedColumn == 3 ? LaunchpadWhiteColor : LaunchpadDarkGreenColor);
+        for (var column = 4; column <= 7; column++)
+            _launchpadInput.SetPadColor(AutomationModeGridRow, column, column == selectedColumn ? LaunchpadWhiteColor : LaunchpadBlueColor);
+    }
+
+    // Same bank the currently-selected page's boxes are showing - the
+    // physical MIDI board only has 8 faders, so whichever page is selected
+    // is what the board's faders currently drive (see MidiFaderInput).
+    private ReadOnlyCollection<MidiFader> CurrentFaderBank() => _selectedFaderPage switch
+    {
+        FaderPage.Bass => Rig.BassFaders,
+        FaderPage.Laser => Rig.LaserFaders,
+        FaderPage.LightBar => Rig.LightBarFaders,
+        FaderPage.Combo => Rig.ComboFaders,
+        _ => Rig.GlobalFaders,
+    };
+
+    // Every fader across all 4 pages feeds the board's 2 status LEDs (the
+    // bottommost button lights when the fader is active, the one above it
+    // lights when the fader is invalidated - see
+    // MidiFaderInput.SetActiveIndicator/SetInvalidatedIndicator), but only
+    // whichever page is currently selected actually drives them, since the
+    // physical board only has 8 faders' worth of LEDs to light.
+    private void HookFaderIndicatorLeds()
+    {
+        foreach (var bank in new[] { Rig.BassFaders, Rig.LaserFaders, Rig.LightBarFaders, Rig.ComboFaders, Rig.GlobalFaders })
+        {
+            foreach (var fader in bank)
+            {
+                fader.PropertyChanged += (_, e) =>
+                {
+                    if (fader.Page != _selectedFaderPage)
+                        return;
+                    if (e.PropertyName is nameof(MidiFader.Value) or nameof(MidiFader.IsInvalidated))
+                        UpdateFaderIndicatorLeds(fader);
+                };
+            }
+        }
+
+        RefreshFaderIndicatorLeds();
+    }
+
+    private void RefreshFaderIndicatorLeds()
+    {
+        foreach (var fader in CurrentFaderBank())
+            UpdateFaderIndicatorLeds(fader);
+    }
+
+    private void UpdateFaderIndicatorLeds(MidiFader fader)
+    {
+        _midiFaderInput.SetActiveIndicator(fader.Index, fader.Value > 0);
+        _midiFaderInput.SetInvalidatedIndicator(fader.Index, fader.IsInvalidated);
+    }
+
+    // Every active (Value > 0, not invalidated) fader across all 4 pages
+    // shows up in the strip above the fader boxes, regardless of which page
+    // is currently selected - effects keep running in the background on
+    // pages the user has switched away from (see the Update*FaderEffect
+    // methods, none of which gate on _selectedFaderPage), so this is the
+    // only way to see them without switching back. GlobalFaders is
+    // deliberately left out of this one - its brightness fader defaults to
+    // (and normally sits at) 100%, which would otherwise show up here
+    // constantly despite not actually restricting anything.
+    private readonly ObservableCollection<MidiFader> _activeFaderEffects = new();
+
+    private void HookActiveFaderEffectsList()
+    {
+        foreach (var bank in new[] { Rig.BassFaders, Rig.LaserFaders, Rig.LightBarFaders, Rig.ComboFaders })
+        {
+            foreach (var fader in bank)
+            {
+                fader.PropertyChanged += (_, e) =>
+                {
+                    if (e.PropertyName is nameof(MidiFader.Value) or nameof(MidiFader.IsInvalidated))
+                        UpdateActiveFaderEffectsList(fader);
+                };
+            }
+        }
+    }
+
+    private void UpdateActiveFaderEffectsList(MidiFader fader)
+    {
+        var shouldShow = fader.Value > 0 && !fader.IsInvalidated;
+        var alreadyShown = _activeFaderEffects.Contains(fader);
+
+        if (shouldShow && !alreadyShown)
+            _activeFaderEffects.Add(fader);
+        else if (!shouldShow && alreadyShown)
+            _activeFaderEffects.Remove(fader);
     }
 
     private Wpf.Ui.Controls.Button? _selectedLightingModeButton;
@@ -868,6 +1515,7 @@ public partial class MainWindow : FluentWindow
         if (mode == LightingMode.Manual)
         {
             _lavaLampAnimator.SetActive(false);
+            _lightBarAmberAnimator.SetTwinkleActive(false);
             _laserAnimator.SetActive(false);
             _laserAnimator.SetChordMode(false);
             _floorTopLeftAmbientAnimator.SetActive(false);
@@ -875,6 +1523,93 @@ public partial class MainWindow : FluentWindow
             _floorBottomLeftAmbientAnimator.SetActive(false);
             _floorBottomRightAmbientAnimator.SetActive(false);
         }
+
+        UpdateAutomationModeLaunchpadColors();
+
+        // The 4 light-group override pads only mean anything outside Full
+        // Auto - re-derive every animator's suppressed state now that the
+        // mode itself just changed (e.g. leaving Full Auto should
+        // immediately re-apply whatever a pad's toggle already says).
+        UpdateLightGroupSuppression();
+    }
+
+    // Launchpad grid row 1 (topmost row of the grid, not the round control
+    // buttons above it), pads 1-3 (column 0-2), mirror the on-screen
+    // automation mode buttons: blue by default, white on whichever one is
+    // currently selected. GridPadChanged numbers rows bottom-to-top, so the
+    // topmost row is row 7.
+    private const int AutomationModeGridRow = 7;
+
+    // Row 2 - one below the automation-mode/fader-page row. See the
+    // bulk-invalidate pads (columns 5-7) and the light-group override pads
+    // (columns 0-3) wired up in the constructor.
+    private const int SecondGridRow = 6;
+
+    private const int LaunchpadWhiteColor = 3;
+    private const int LaunchpadBlueColor = 45;
+    private const int LaunchpadDarkGreenColor = 18;
+
+    private void UpdateAutomationModeLaunchpadColors()
+    {
+        var selectedIndex = _lightingMode switch
+        {
+            LightingMode.FullAuto => 0,
+            LightingMode.SemiAuto => 1,
+            _ => 2,
+        };
+
+        for (var i = 0; i <= 2; i++)
+            _launchpadInput.SetPadColor(AutomationModeGridRow, i, i == selectedIndex ? LaunchpadWhiteColor : LaunchpadBlueColor);
+    }
+
+    // Row 2, pads 1-4: whether each whole light group is allowed to do
+    // anything at all in Semi Auto/Manual mode - true (lit white) by
+    // default, toggled off (dark) by pressing the pad. Full Auto ignores
+    // these entirely, per the request that they "not do anything in full
+    // auto mode". See UpdateLightGroupSuppression.
+    private bool _wallGroupOverrideEnabled = true;
+    private bool _floorGroupOverrideEnabled = true;
+    private bool _laserGroupOverrideEnabled = true;
+    private bool _lightBarGroupOverrideEnabled = true;
+
+    // Pushes the 4 toggle states above (plus the current lighting mode) out
+    // to every animator that can light the corresponding group, and repaints
+    // the 4 pads to match. Called whenever a pad is pressed or the lighting
+    // mode changes - a group stays suppressed regardless of what any
+    // automated or manual effect tries to do to it while its pad is off and
+    // the mode isn't Full Auto.
+    private void UpdateLightGroupSuppression()
+    {
+        var inFullAuto = _lightingMode == LightingMode.FullAuto;
+
+        var suppressWall = !inFullAuto && !_wallGroupOverrideEnabled;
+        _parFlashAnimator.SetSuppressed(suppressWall);
+        _wallStripFlashAnimator.SetSuppressed(suppressWall);
+        _comboWallColorCycleAnimator.SetSuppressed(suppressWall);
+        _comboSweepAnimator.SetWallGroupSuppressed(suppressWall);
+
+        var suppressFloor = !inFullAuto && !_floorGroupOverrideEnabled;
+        _floorParFlashAnimator.SetSuppressed(suppressFloor);
+        _floorTopLeftAmbientAnimator.SetSuppressed(suppressFloor);
+        _floorTopRightAmbientAnimator.SetSuppressed(suppressFloor);
+        _floorBottomLeftAmbientAnimator.SetSuppressed(suppressFloor);
+        _floorBottomRightAmbientAnimator.SetSuppressed(suppressFloor);
+        _comboSweepAnimator.SetFloorGroupSuppressed(suppressFloor);
+
+        var suppressLaser = !inFullAuto && !_laserGroupOverrideEnabled;
+        _laserAnimator.SetSuppressed(suppressLaser);
+        _laserSecondEffectAnimator.SetSuppressed(suppressLaser);
+
+        var suppressLightBars = !inFullAuto && !_lightBarGroupOverrideEnabled;
+        _lightBarFlashAnimator.SetSuppressed(suppressLightBars);
+        _lavaLampAnimator.SetSuppressed(suppressLightBars);
+        _lightBarAmberAnimator.SetSuppressed(suppressLightBars);
+        _lightBarWhiteFlashAnimator.SetSuppressed(suppressLightBars);
+
+        _launchpadInput.SetPadColor(SecondGridRow, 0, _wallGroupOverrideEnabled ? LaunchpadWhiteColor : 0);
+        _launchpadInput.SetPadColor(SecondGridRow, 1, _floorGroupOverrideEnabled ? LaunchpadWhiteColor : 0);
+        _launchpadInput.SetPadColor(SecondGridRow, 2, _laserGroupOverrideEnabled ? LaunchpadWhiteColor : 0);
+        _launchpadInput.SetPadColor(SecondGridRow, 3, _lightBarGroupOverrideEnabled ? LaunchpadWhiteColor : 0);
     }
 
     private void DmxConnectButton_Click(object sender, RoutedEventArgs e)
@@ -921,10 +1656,11 @@ public partial class MainWindow : FluentWindow
     }
 
     /// <summary>
-    /// Starts WASAPI loopback capture (the device is chosen automatically -
-    /// see <see cref="AudioCaptureService.Start"/>) and feeds every buffer
-    /// through the bass onset detector, flashing the par lights on each
-    /// detected hit.
+    /// Starts WASAPI loopback capture - on whatever device the audio-source
+    /// dropdown currently has selected (see <see cref="AudioSourceComboBox_SelectionChanged"/>),
+    /// or auto-picked (see <see cref="AudioCaptureService.Start"/>) if left
+    /// on "Auto" - and feeds every buffer through the bass onset detector,
+    /// flashing the par lights on each detected hit.
     /// </summary>
     private void StartListening()
     {
@@ -941,6 +1677,57 @@ public partial class MainWindow : FluentWindow
             // No default playback device, no active audio session, etc. The
             // visualizer still works without live audio; just log for now.
             System.Diagnostics.Debug.WriteLine($"Audio capture failed to start: {ex.Message}");
+            AudioDeviceStatusText.Text = $"Failed: {ex.Message}";
+        }
+    }
+
+    /// <summary>Fills the audio-source dropdown, defaulting to "Auto" - called once at startup, before <see cref="StartListening"/>.</summary>
+    private void PopulateAudioSources()
+    {
+        AudioSourceComboBox.ItemsSource = AudioCaptureService.GetAvailableDevices();
+        AudioSourceComboBox.SelectedIndex = 0;
+    }
+
+    // Refreshes the device list every time the dropdown opens (mirrors
+    // DmxPortComboBox_DropDownOpened) so a Bluetooth speaker that's just been
+    // paired/connected - or one that's dropped off - shows up without a
+    // restart, while preserving the current selection when it's still valid.
+    private void AudioSourceComboBox_DropDownOpened(object sender, EventArgs e)
+    {
+        var selected = AudioSourceComboBox.SelectedItem as AudioDeviceOption;
+
+        AudioSourceComboBox.ItemsSource = AudioCaptureService.GetAvailableDevices();
+
+        if (selected is not null && AudioSourceComboBox.Items.Contains(selected))
+            AudioSourceComboBox.SelectedItem = selected;
+        else if (AudioSourceComboBox.Items.Count > 0)
+            AudioSourceComboBox.SelectedIndex = 0;
+    }
+
+    private void AudioSourceComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (AudioSourceComboBox.SelectedItem is not AudioDeviceOption option)
+            return;
+
+        // Not listening yet (this fires once during startup population,
+        // before StartListening has run) - just remember the choice rather
+        // than trying to switch a capture stream that doesn't exist yet.
+        if (!_audioCapture.IsCapturing)
+        {
+            _audioCapture.PreferredDeviceId = option.Id;
+            return;
+        }
+
+        try
+        {
+            _audioCapture.SwitchDevice(option.Id);
+            AudioDeviceStatusText.Text = _audioCapture.CurrentDevice is { } device
+                ? $"Listening on {device.FriendlyName}"
+                : "Listening";
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Audio device switch failed: {ex.Message}");
             AudioDeviceStatusText.Text = $"Failed: {ex.Message}";
         }
     }
@@ -1002,6 +1789,7 @@ public partial class MainWindow : FluentWindow
         var bufferSeconds = (double)e.Samples.Length / e.SampleRate;
         _effectBrightness.Process(_melodicPassageDetector.MidHighLevel, _bassOnsetDetector.SmoothedLevel, bufferSeconds);
         _lavaLampAnimator.BrightnessFactor = _effectBrightness.Brightness;
+        _lightBarAmberAnimator.BrightnessFactor = _effectBrightness.Brightness;
         _laserAnimator.BrightnessFactor = _effectBrightness.Brightness;
 
         var wantsLavaLamp = _melodicPassageDetector.IsActive;
@@ -1016,6 +1804,7 @@ public partial class MainWindow : FluentWindow
                 // automation is on.
                 var effectiveActive = wantsLavaLamp && AutomationEnabled;
                 _lavaLampAnimator.SetActive(effectiveActive);
+                _lightBarAmberAnimator.SetTwinkleActive(effectiveActive);
                 _laserAnimator.SetActive(effectiveActive);
 
                 // TEMP: debug status text, for correlating against real audio. Remove when done.
@@ -1029,6 +1818,7 @@ public partial class MainWindow : FluentWindow
         // direct-set, no-dispatcher reasoning as brightness above.
         _effectSpeed.Process(_loudnessTracker.SmoothedRms, bufferSeconds);
         _lavaLampAnimator.SpeedFactor = _effectSpeed.SpeedFactor;
+        _lightBarAmberAnimator.SpeedFactor = _effectSpeed.SpeedFactor;
         _laserAnimator.SpeedFactor = _effectSpeed.SpeedFactor;
 
         var isLoud = _loudnessTracker.IsLoud;
@@ -1080,6 +1870,14 @@ public partial class MainWindow : FluentWindow
                 _floorTopRightAmbientAnimator.Flash(decaySeconds, PercussionFlashPeakIntensity);
                 _floorBottomLeftAmbientAnimator.Flash(decaySeconds, PercussionFlashPeakIntensity);
                 _floorBottomRightAmbientAnimator.Flash(decaySeconds, PercussionFlashPeakIntensity);
+
+                // A random handful of the light bars' white LEDs flash
+                // along with the floor pars - with the big amber bulbs kept
+                // dark and the colored LEDs dimmed for as long as these
+                // keep coming, so the white flashes stand out.
+                _lightBarWhiteFlashAnimator.FlashRandom(decaySeconds, PercussionFlashPeakIntensity);
+                _lightBarAmberAnimator.HideTwinkleFor(BuildupLightBarHoldSeconds);
+                _lightBarRgbDimmer.DimFor(BuildupLightBarHoldSeconds);
             });
         };
         return detector;
@@ -1095,6 +1893,12 @@ public partial class MainWindow : FluentWindow
     // flash rather than full white - a touch softer than the whole-rig
     // impact flash (which stays full brightness).
     private const double PercussionFlashPeakIntensity = 0.6;
+
+    // How long each percussion-buildup hit keeps the amber bulbs' twinkle off
+    // and the colored LEDs dimmed - comfortably longer than the widest gap
+    // the buildup detector still counts as part of a buildup, so neither
+    // flickers back between hits, then both return shortly after it ends.
+    private const double BuildupLightBarHoldSeconds = 1.0;
 
     // Once the whole-rig white flash fires, suppress it from firing again for
     // this long - long enough to cover the handful of hits it typically takes
@@ -1113,6 +1917,20 @@ public partial class MainWindow : FluentWindow
     // suppressed through the gaps between hits in a normal groove, not just
     // in the instant right after one.
     private const double RecentBassHitWindowSeconds = 1.5;
+
+    // How long the bass has to have been gone for its return to count as a
+    // drop (see OnBassHit) - a couple of bars at typical dance tempos, well
+    // past any gap within a normal groove or a single skipped beat.
+    private const double DropBassAbsenceSeconds = 4.0;
+
+    private const double DropAmberFlashDecaySeconds = 0.4;
+
+    // Snappier than the wall pars' own 0.22s flash decay - the bulbs are
+    // bright enough that a longer tail smears beat into beat.
+    private const double BassHitAmberPulseDecaySeconds = 0.1;
+
+    private readonly Random _random = new();
+    private int _lastPulsedLightBarIndex = -1;
 
     /// <summary>
     /// Registers the beat with the pattern sequencer (which rotates the
@@ -1142,12 +1960,25 @@ public partial class MainWindow : FluentWindow
     /// </summary>
     private void OnBassHit()
     {
-        _lastBassHitTime = DateTime.UtcNow;
+        var now = DateTime.UtcNow;
+
+        // The bass coming back after being gone for a while (a breakdown or
+        // buildup) is the drop landing - this hit is its first beat. The
+        // very first hit since launch doesn't count: there's no telling
+        // whether the bass was actually absent beforehand or the app was
+        // just started mid-song.
+        var isFirstBeatOfDrop = _lastBassHitTime != DateTime.MinValue
+            && (now - _lastBassHitTime).TotalSeconds >= DropBassAbsenceSeconds;
+
+        _lastBassHitTime = now;
         _basslineTracker.RegisterBassHit();
         _patternSequencer.RegisterBeat();
 
         if (!AutomationEnabled)
             return;
+
+        if (isFirstBeatOfDrop)
+            _lightBarAmberAnimator.FlashAll(DropAmberFlashDecaySeconds);
 
         var justHadRigFlash = (DateTime.UtcNow - _lastRigFlashTime).TotalSeconds < RigFlashOverrideWindowSeconds;
         if (justHadRigFlash)
@@ -1172,6 +2003,26 @@ public partial class MainWindow : FluentWindow
             _wallStripFlashAnimator.FlashColor = _patternSequencer.CurrentFlashColor;
             _wallStripFlashAnimator.FlashAll();
         }
+        else
+        {
+            // The striplight sits this beat out, so a ceiling bar takes it
+            // instead: every big bulb on one random bar - never the same
+            // bar twice in a row, so consecutive pulses visibly move around.
+            int barIndex;
+            if (_lastPulsedLightBarIndex < 0)
+            {
+                barIndex = _random.Next(Rig.LightBars.Count);
+            }
+            else
+            {
+                barIndex = _random.Next(Rig.LightBars.Count - 1);
+                if (barIndex >= _lastPulsedLightBarIndex)
+                    barIndex++;
+            }
+            _lastPulsedLightBarIndex = barIndex;
+
+            _lightBarAmberAnimator.FlashBar(barIndex, BassHitAmberPulseDecaySeconds);
+        }
 
         // Floor par lights no longer echo per-bass-hit flashes - they're
         // reserved for percussion buildups (CreatePercussionBuildupDetector)
@@ -1192,11 +2043,11 @@ public partial class MainWindow : FluentWindow
     /// - and only once per such moment: a cooldown stops the first few hits
     /// of a bassline spinning up from each re-triggering their own flash.
     /// The floor par lights always flash full white for this. The wall par
-    /// lights and every LED strip only join in for a genuinely extreme
+    /// lights and every light bar only join in for a genuinely extreme
     /// moment (abnormally quiet for the preceding few seconds, then suddenly
-    /// loud - a real drop) - otherwise just the far left and right strips
-    /// flash, so the full whole-rig flash stays reserved for the biggest
-    /// moments.
+    /// loud - a real drop) - otherwise just the front-most and back-most
+    /// bars flash, so the full whole-rig flash stays reserved for the
+    /// biggest moments.
     /// </summary>
     private void OnImpact(bool isExtreme)
     {
@@ -1222,19 +2073,19 @@ public partial class MainWindow : FluentWindow
         _floorBottomLeftAmbientAnimator.Flash();
         _floorBottomRightAmbientAnimator.Flash();
 
-        _stripFlashAnimator.FlashColor = Colors.White;
+        _lightBarFlashAnimator.FlashColor = Colors.White;
         if (isExtreme)
         {
-            // Big white flash: every strip and every par light (wall + floor).
-            _stripFlashAnimator.FlashAll();
+            // Big white flash: every light bar and every par light (wall + floor).
+            _lightBarFlashAnimator.FlashAll();
 
             _parFlashAnimator.FlashColor = Colors.White;
             _parFlashAnimator.FlashAll();
         }
         else
         {
-            var strips = Rig.LedStrips;
-            _stripFlashAnimator.Flash(new[] { strips[0], strips[^1] });
+            // Just the outermost pair - the front-most and back-most bars.
+            _lightBarFlashAnimator.Flash(new[] { Rig.FrontLeftBar, Rig.BackRightBar });
         }
     }
 }

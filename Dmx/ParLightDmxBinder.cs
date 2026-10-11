@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using AEPiLightingSystem.Models;
 
@@ -11,6 +13,13 @@ namespace AEPiLightingSystem.Dmx;
 /// already bake brightness into the RGB values themselves - and
 /// Strobe/Auto/Speed are pinned to 0 so the fixture stays in plain DMX RGB
 /// mode rather than running its own built-in programs.
+///
+/// <see cref="LightingRig.GlobalBrightness"/> (the Global fader page's own
+/// max-brightness fader) additionally scales every R/G/B value written out
+/// here, on top of whatever the light's own Color already is - applied at
+/// the very last step before the DMX universe, so it affects the real
+/// fixture regardless of which mode (or which effect, manual or automated)
+/// produced that color in the first place.
 /// </summary>
 public sealed class ParLightDmxBinder
 {
@@ -37,40 +46,61 @@ public sealed class ParLightDmxBinder
     private const int WallBottomLeftBaseChannel = 49;
     private const int WallTopLeftBaseChannel = 56;
 
+    private readonly LightingRig _rig;
+    private readonly DmxUniverse _universe;
+    private readonly List<(ParLight Light, int BaseChannel)> _bound = new();
+
     public ParLightDmxBinder(LightingRig rig, DmxUniverse universe)
     {
-        Bind(rig.FloorTopLeftPar, TopLeftBaseChannel, universe);
-        Bind(rig.FloorBottomLeftPar, BottomLeftBaseChannel, universe);
-        Bind(rig.FloorBottomRightPar, BottomRightBaseChannel, universe);
-        Bind(rig.FloorTopRightPar, TopRightBaseChannel, universe);
+        _rig = rig;
+        _universe = universe;
 
-        Bind(rig.TopRightPar, WallTopRightBaseChannel, universe);
-        Bind(rig.BottomRightPar, WallBottomRightBaseChannel, universe);
-        Bind(rig.BottomLeftPar, WallBottomLeftBaseChannel, universe);
-        Bind(rig.TopLeftPar, WallTopLeftBaseChannel, universe);
+        Bind(rig.FloorTopLeftPar, TopLeftBaseChannel);
+        Bind(rig.FloorBottomLeftPar, BottomLeftBaseChannel);
+        Bind(rig.FloorBottomRightPar, BottomRightBaseChannel);
+        Bind(rig.FloorTopRightPar, TopRightBaseChannel);
+
+        Bind(rig.TopRightPar, WallTopRightBaseChannel);
+        Bind(rig.BottomRightPar, WallBottomRightBaseChannel);
+        Bind(rig.BottomLeftPar, WallBottomLeftBaseChannel);
+        Bind(rig.TopLeftPar, WallTopLeftBaseChannel);
+
+        rig.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is null or nameof(LightingRig.GlobalBrightness))
+                ReapplyAll();
+        };
     }
 
-    private static void Bind(ParLight light, int baseChannel, DmxUniverse universe)
+    private void Bind(ParLight light, int baseChannel)
     {
-        universe.SetChannel(baseChannel + DimmerOffset, 255);
-        universe.SetChannel(baseChannel + StrobeOffset, 0);
-        universe.SetChannel(baseChannel + AutoProgramOffset, 0);
-        universe.SetChannel(baseChannel + ProgramSpeedOffset, 0);
+        _universe.SetChannel(baseChannel + DimmerOffset, 255);
+        _universe.SetChannel(baseChannel + StrobeOffset, 0);
+        _universe.SetChannel(baseChannel + AutoProgramOffset, 0);
+        _universe.SetChannel(baseChannel + ProgramSpeedOffset, 0);
 
-        ApplyColor(light, baseChannel, universe);
+        _bound.Add((light, baseChannel));
+        ApplyColor(light, baseChannel);
 
         light.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName is null or nameof(ParLight.Color))
-                ApplyColor(light, baseChannel, universe);
+                ApplyColor(light, baseChannel);
         };
     }
 
-    private static void ApplyColor(ParLight light, int baseChannel, DmxUniverse universe)
+    private void ReapplyAll()
     {
+        foreach (var (light, baseChannel) in _bound)
+            ApplyColor(light, baseChannel);
+    }
+
+    private void ApplyColor(ParLight light, int baseChannel)
+    {
+        var brightness = Math.Clamp(_rig.GlobalBrightness, 0.0, 1.0);
         var color = light.Color;
-        universe.SetChannel(baseChannel + RedOffset, color.R);
-        universe.SetChannel(baseChannel + GreenOffset, color.G);
-        universe.SetChannel(baseChannel + BlueOffset, color.B);
+        _universe.SetChannel(baseChannel + RedOffset, (byte)Math.Round(color.R * brightness));
+        _universe.SetChannel(baseChannel + GreenOffset, (byte)Math.Round(color.G * brightness));
+        _universe.SetChannel(baseChannel + BlueOffset, (byte)Math.Round(color.B * brightness));
     }
 }

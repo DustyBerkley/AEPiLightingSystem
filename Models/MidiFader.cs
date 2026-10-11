@@ -16,21 +16,37 @@ public sealed class MidiFader : INotifyPropertyChanged
 
     public int Index { get; }
 
+    /// <summary>Page formatted the way its on-screen page-select button reads - "Pars" for Bass, "Light Bars" for LightBar, etc.</summary>
+    public string PageDisplayName => Page switch
+    {
+        FaderPage.Bass => "Pars",
+        FaderPage.Laser => "Laser",
+        FaderPage.LightBar => "Light Bars",
+        FaderPage.Combo => "Combo",
+        _ => "Global",
+    };
+
     /// <summary>0 (all the way down) to 1 (all the way up).</summary>
     public double Value
     {
         get => _value;
         set
         {
-            // Checked before the "did it actually change" bail-out below,
-            // since the physical fader genuinely returning to 0% is what
-            // clears an invalidation - and it may already read 0 here (this
-            // very state is what Invalidate() forced it to), so a plain
-            // "value changed" check would never see that as a change to act on.
-            if (IsInvalidated && value == 0)
+            // While invalidated, the real fader is still sitting wherever it
+            // was when Invalidate() forced this to 0 - it must be brought
+            // all the way back down before this fader can react again, not
+            // just nudged. So any write other than an exact 0 is ignored
+            // outright here, rather than being allowed through to update
+            // _value, which would silently un-pin the displayed value (and
+            // let effects fire again) despite IsInvalidated still being set.
+            if (IsInvalidated)
             {
+                if (value != 0)
+                    return;
+
                 IsInvalidated = false;
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsInvalidated)));
+                return;
             }
 
             if (_value == value)
@@ -82,6 +98,7 @@ public sealed class MidiFader : INotifyPropertyChanged
             _beatInterval = value;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(BeatInterval)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(BeatIntervalLabel)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplayLabel)));
         }
     }
 
@@ -90,9 +107,37 @@ public sealed class MidiFader : INotifyPropertyChanged
     {
         0.5 => "1/2",
         0.25 => "1/4",
+        0.125 => "1/8",
+        0.0625 => "1/16",
         _ when BeatInterval == System.Math.Floor(BeatInterval) => ((int)BeatInterval).ToString(),
         _ => BeatInterval.ToString("0.##"),
     };
+
+    private string? _customDisplayLabel;
+
+    /// <summary>
+    /// Overrides <see cref="BeatIntervalLabel"/> in the top-right corner of
+    /// this fader's box - for an effect whose knob controls something other
+    /// than a beat fraction (e.g. the combo wall color cycle's knob dialing
+    /// a duration in seconds, see MainWindow.UpdateComboWallColorCycleFaderEffect),
+    /// where showing the unused BeatInterval would just be misleading. Null
+    /// (the default) falls back to BeatIntervalLabel as normal.
+    /// </summary>
+    public string? CustomDisplayLabel
+    {
+        get => _customDisplayLabel;
+        set
+        {
+            if (_customDisplayLabel == value)
+                return;
+            _customDisplayLabel = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CustomDisplayLabel)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplayLabel)));
+        }
+    }
+
+    /// <summary>What the fader box's top-right label actually shows - CustomDisplayLabel if set, else BeatIntervalLabel.</summary>
+    public string DisplayLabel => CustomDisplayLabel ?? BeatIntervalLabel;
 
     public MidiFader(FaderPage page, int index, double value = 0.0)
     {

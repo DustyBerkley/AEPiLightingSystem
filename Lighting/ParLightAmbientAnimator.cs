@@ -44,14 +44,46 @@ public sealed class ParLightAmbientAnimator
     /// </summary>
     public Color FlashColor { get; set; } = Colors.White;
 
+    /// <summary>
+    /// True while a light-group override (see MainWindow's Launchpad row-2
+    /// pads 1-4) is forcing this group off - SetActive/Flash calls are
+    /// ignored outright while set, regardless of who's calling them (manual
+    /// fader effect or automation).
+    /// </summary>
+    public bool IsSuppressed { get; private set; }
+
     public ParLightAmbientAnimator(IReadOnlyList<ParLight> lights)
     {
         _lights = lights;
     }
 
+    /// <summary>Force this group off (true) or let it respond to SetActive/Flash calls again (false).</summary>
+    public void SetSuppressed(bool suppressed)
+    {
+        IsSuppressed = suppressed;
+        if (!suppressed)
+            return;
+
+        _ambientTargetIntensity = 0.0;
+        _ambientCurrentIntensity = 0.0;
+        _flashIntensity = 0.0;
+
+        foreach (var light in _lights)
+            light.Color = Colors.Black;
+
+        if (_isRunning)
+        {
+            CompositionTarget.Rendering -= OnRendering;
+            _isRunning = false;
+        }
+    }
+
     /// <summary>Call whenever the "is music reasonably loud" state changes.</summary>
     public void SetActive(bool loud)
     {
+        if (IsSuppressed)
+            return;
+
         _ambientTargetIntensity = loud ? 1.0 : 0.0;
         EnsureRunning();
     }
@@ -66,6 +98,9 @@ public sealed class ParLightAmbientAnimator
     /// </summary>
     public void Flash(double? decaySeconds = null, double peakIntensity = 1.0)
     {
+        if (IsSuppressed)
+            return;
+
         _flashIntensity = Math.Clamp(peakIntensity, 0.0, 1.0);
         _flashDecaySeconds = Math.Max(MinimumFlashDecaySeconds, decaySeconds ?? DefaultFlashDecaySeconds);
         EnsureRunning();
@@ -104,15 +139,26 @@ public sealed class ParLightAmbientAnimator
         // the brighter of the two per channel is what lets the flash read
         // as a spike over the (always grayscale) baseline instead of one
         // fighting the other, the same "brighter wins" idea used elsewhere
-        // for overlapping effects.
+        // for overlapping effects. The light's current color is folded into
+        // that same max too, so this composites correctly with whatever
+        // else might be writing to the same light (e.g. a combo fader's
+        // continuous color cycle) instead of overwriting it outright.
         var ambientColor = ToGray(_ambientCurrentIntensity * TargetBrightness);
         var flashColor = Scale(FlashColor, _flashIntensity);
-        var color = Max(ambientColor, flashColor);
+        var ownColor = Max(ambientColor, flashColor);
 
         foreach (var light in _lights)
-            light.Color = color;
+            light.Color = Max(light.Color, ownColor);
 
-        var stillAnimating = _flashIntensity > 0.0005 || _ambientCurrentIntensity != _ambientTargetIntensity;
+        // Deliberately NOT "has it finished transitioning" - MainWindow
+        // clears every composited ParLight to black at the start of each
+        // frame (see ClearCompositedParLights) before any Max-blend
+        // animator re-asserts its own contribution, so a steady, non-zero
+        // ambient baseline (e.g. music holding loud) has to keep
+        // re-writing every single frame or it'd read as going black the
+        // instant this stops "still transitioning" and unsubscribes. Only
+        // genuinely having nothing left to contribute is safe to stop on.
+        var stillAnimating = _flashIntensity > 0.0005 || _ambientCurrentIntensity > 0.0005;
         if (!stillAnimating)
         {
             CompositionTarget.Rendering -= OnRendering;

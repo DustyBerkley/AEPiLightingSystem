@@ -41,6 +41,43 @@ public class LaserFixture
     /// </summary>
     public int ChordHitIndex { get; set; }
 
+    /// <summary>
+    /// Whether the wave/lava-lamp effect (1st manual laser fader, or the
+    /// automated system) is actually wanted on right now - set immediately
+    /// on activate/deactivate by <see cref="Lighting.LaserFanAnimator"/>,
+    /// deliberately NOT tied to its own smooth intensity fade-out, so
+    /// <see cref="Dmx.LaserDmxBinder"/> can flip the fixture fully off the
+    /// instant the fader/automation actually wants it off rather than
+    /// waiting through that cosmetic fade - real laser hardware has no
+    /// variable-brightness channel to fade in the first place, so that
+    /// delay was pure lag with no payoff.
+    /// </summary>
+    public bool IsWaveEffectActive { get; set; }
+
+    /// <summary>
+    /// Whether the 2nd manual laser fader effect (see
+    /// <see cref="Lighting.LaserSecondEffectAnimator"/>) is currently
+    /// driving the fixture - when true, <see cref="Dmx.LaserDmxBinder"/>
+    /// takes Rotation/Horizontal Movement/Vertical Zoom from the
+    /// SecondEffect* properties below (their own confirmed ranges) and the
+    /// color from <see cref="SecondEffectHueDegrees"/>, instead of the
+    /// normal wave/lava-lamp group-driven values - every other channel stays
+    /// exactly the same either way.
+    /// </summary>
+    public bool IsSecondEffectActive { get; set; }
+
+    /// <summary>0-1 wander driving Rotation's confirmed 15-47 DMX range for the 2nd manual laser effect.</summary>
+    public double SecondEffectRotationFraction { get; set; }
+
+    /// <summary>0-1 wander driving Horizontal Movement's confirmed 57-91 DMX range for the 2nd manual laser effect.</summary>
+    public double SecondEffectHorizontalFraction { get; set; }
+
+    /// <summary>0-1 wander driving Vertical Zoom's confirmed 0-60 DMX range for the 2nd manual laser effect.</summary>
+    public double SecondEffectVerticalZoomFraction { get; set; }
+
+    /// <summary>Hue behind the 2nd manual laser effect's own Color Change channel - picked once per activation, same as the wave effect's own hue.</summary>
+    public double SecondEffectHueDegrees { get; set; }
+
     /// <summary>Raised after every group has been updated in bulk, so views can redraw.</summary>
     public event EventHandler? GroupsChanged;
 

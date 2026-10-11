@@ -5,7 +5,7 @@ namespace AEPiLightingSystem.Audio;
 /// <summary>
 /// Turns the mid-arpeggio and bassline loudness into a single smoothed
 /// brightness multiplier, shared by every effect that should breathe with
-/// the music's volume (currently the LED strips' lava lamp and the laser's
+/// the music's volume (currently the light bars' lava lamp and the laser's
 /// wave effect). Mid/high content drives most of it; bass contributes only
 /// a little. Deliberately subtle: output stays within
 /// [<see cref="MinBrightness"/>, <see cref="MaxBrightness"/>] so the effects

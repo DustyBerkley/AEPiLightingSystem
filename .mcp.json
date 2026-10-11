@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "basic-memory": {
+      "type": "stdio",
+      "command": "basic-memory",
+      "args": [
+        "mcp",
+        "--project",
+        "aepi-lighting-system"
+      ],
+      "env": {}
+    }
+  }
+}

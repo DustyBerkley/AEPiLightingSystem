@@ -64,7 +64,13 @@ public sealed class WallStripLightDmxBinder
     private readonly DmxUniverse _universe;
     private readonly int _baseChannel;
 
-    public WallStripLightDmxBinder(WallStripLight light, DmxUniverse universe, int baseChannel)
+    /// <param name="rig">
+    /// Only consulted for <see cref="LightingRig.GlobalBrightness"/> (the
+    /// Global fader page's own max-brightness fader), which drives this
+    /// fixture's real Master Dimmer channel directly - applied regardless
+    /// of which mode or effect is otherwise driving <paramref name="light"/>.
+    /// </param>
+    public WallStripLightDmxBinder(LightingRig rig, WallStripLight light, DmxUniverse universe, int baseChannel)
     {
         _light = light;
         _universe = universe;
@@ -73,8 +79,14 @@ public sealed class WallStripLightDmxBinder
         universe.SetChannel(baseChannel + PanSpeedOffset, PanSpeedValue);
         universe.SetChannel(baseChannel + BuiltInProgramOffset, 0);
         universe.SetChannel(baseChannel + BuiltInProgramSpeedOffset, 0);
-        universe.SetChannel(baseChannel + MasterDimmerOffset, 255);
         universe.SetChannel(baseChannel + StrobeOffset, 0);
+
+        ApplyMasterDimmer(rig.GlobalBrightness);
+        rig.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is null or nameof(LightingRig.GlobalBrightness))
+                ApplyMasterDimmer(rig.GlobalBrightness);
+        };
 
         ApplyPan(light.DisplayFacingAngleDegrees);
         light.PropertyChanged += (_, e) =>
@@ -93,6 +105,12 @@ public sealed class WallStripLightDmxBinder
                     ApplyBarColor(index);
             };
         }
+    }
+
+    private void ApplyMasterDimmer(double globalBrightness)
+    {
+        var value = Math.Clamp(globalBrightness, 0.0, 1.0) * 255.0;
+        _universe.SetChannel(_baseChannel + MasterDimmerOffset, (byte)Math.Round(value));
     }
 
     private void ApplyPan(double facingAngleDegrees)

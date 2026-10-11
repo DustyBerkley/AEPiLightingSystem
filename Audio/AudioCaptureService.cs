@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
@@ -31,12 +32,22 @@ public sealed class AudioCaptureService : IDisposable
     /// <summary>The device currently being captured from, once started - shown in the UI so a mismatch is diagnosable at a glance.</summary>
     public MMDevice? CurrentDevice { get; private set; }
 
+    /// <summary>
+    /// The specific render device (by MMDevice.ID) to capture from - e.g. a
+    /// Bluetooth speaker the user picked from the audio-source dropdown
+    /// instead of trusting <see cref="FindPreferredDevice"/>'s guess. Null
+    /// means auto-pick. Takes effect on the next <see cref="Start"/> - use
+    /// <see cref="SwitchDevice"/> to also restart an already-running capture
+    /// immediately.
+    /// </summary>
+    public string? PreferredDeviceId { get; set; }
+
     public void Start()
     {
         if (_capture is not null)
             return;
 
-        var device = FindPreferredDevice();
+        var device = FindPreferredDevice(PreferredDeviceId);
 
         _capture = new WasapiLoopbackCapture(device);
         _capture.DataAvailable += OnDataAvailable;
@@ -58,7 +69,13 @@ public sealed class AudioCaptureService : IDisposable
     }
 
     /// <summary>
-    /// Picks the device to capture from. Deliberately does not just trust
+    /// Picks the device to capture from. <paramref name="preferredDeviceId"/>
+    /// (see <see cref="PreferredDeviceId"/>) wins outright when set and still
+    /// present - e.g. a Bluetooth speaker the user explicitly chose from the
+    /// audio-source dropdown, which this otherwise has no way to prefer over
+    /// a wired "Speakers" device on its own.
+    ///
+    /// Absent an explicit choice, this deliberately does not just trust
     /// Windows' "default" playback device - a DJ audio interface (or
     /// similar) commonly claims default-device status the moment it's
     /// connected, even when the DJ software actually sends its audio out
@@ -68,10 +85,23 @@ public sealed class AudioCaptureService : IDisposable
     /// audible - are what should be captured, so a device literally named
     /// "Speakers" is preferred outright over trusting default status.
     /// </summary>
-    private static MMDevice FindPreferredDevice()
+    private static MMDevice FindPreferredDevice(string? preferredDeviceId)
     {
         using var enumerator = new MMDeviceEnumerator();
         var devices = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active);
+
+        if (preferredDeviceId is not null)
+        {
+            var preferred = devices.FirstOrDefault(d => d.ID == preferredDeviceId);
+            if (preferred is not null)
+                return preferred;
+
+            // Fell through - the chosen device (a Bluetooth speaker that's
+            // since been powered off/disconnected, most likely) isn't
+            // available right now. Fall back to the same guess as if nothing
+            // had been chosen at all rather than throwing, so playback
+            // audio keeps working even if the preferred device is briefly gone.
+        }
 
         var speakerDevice = devices.FirstOrDefault(
             d => d.FriendlyName.Contains("Speaker", StringComparison.OrdinalIgnoreCase));
@@ -79,13 +109,65 @@ public sealed class AudioCaptureService : IDisposable
         return speakerDevice ?? enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
     }
 
+    /// <summary>
+    /// Every active playback device Windows currently knows about -
+    /// including Bluetooth speakers/headsets, once paired and connected -
+    /// for populating the audio-source dropdown. Starts with an "auto" entry
+    /// (Id: null) that reproduces <see cref="FindPreferredDevice"/>'s own
+    /// default-guessing behavior.
+    /// </summary>
+    public static List<AudioDeviceOption> GetAvailableDevices()
+    {
+        var options = new List<AudioDeviceOption> { new(null, "Auto (default speakers)") };
+
+        using var enumerator = new MMDeviceEnumerator();
+        foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
+            options.Add(new AudioDeviceOption(device.ID, device.FriendlyName));
+
+        return options;
+    }
+
     public void Stop()
     {
-        _capture?.StopRecording();
+        if (_capture is { } capture)
+        {
+            // Detach immediately, synchronously, rather than waiting for the
+            // async RecordingStopped callback to clear _capture (which used
+            // to leave a window where an immediately-following Start() - see
+            // SwitchDevice - would see the old, not-yet-nulled _capture and
+            // silently no-op, permanently killing capture since the eventual
+            // callback sees a clean stop and doesn't auto-restart). Detaching
+            // here also means that callback, whenever it does fire, can't
+            // touch whatever _capture has since become.
+            capture.DataAvailable -= OnDataAvailable;
+            capture.RecordingStopped -= OnRecordingStopped;
+            capture.RecordingStopped += (_, _) => capture.Dispose();
+            capture.StopRecording();
+        }
+
+        _capture = null;
+
         _keepAliveOutput?.Stop();
         _keepAliveOutput?.Dispose();
         _keepAliveOutput = null;
         CurrentDevice = null;
+    }
+
+    /// <summary>
+    /// Changes which device to capture from - e.g. the user picking a
+    /// Bluetooth speaker from the audio-source dropdown. Restarts capture on
+    /// the new device immediately if already running; otherwise just
+    /// remembers the choice for the next <see cref="Start"/>.
+    /// </summary>
+    public void SwitchDevice(string? deviceId)
+    {
+        PreferredDeviceId = deviceId;
+
+        if (!IsCapturing)
+            return;
+
+        Stop();
+        Start();
     }
 
     private void OnDataAvailable(object? sender, WaveInEventArgs e)
@@ -114,28 +196,27 @@ public sealed class AudioCaptureService : IDisposable
         }
     }
 
+    // Stop() detaches this handler from a capture instance before
+    // intentionally stopping it, so the only way this ever fires is a
+    // genuinely unexpected stream death (device unplugged, driver hiccup,
+    // Bluetooth dropout, etc) on the still-current capture - a stale event
+    // from an already-replaced instance can't reach here. That used to mean
+    // total silence forever after - nothing ever restarted the stream -
+    // which read as the whole rig freezing. Auto-restart so a transient
+    // hiccup recovers on its own instead.
     private void OnRecordingStopped(object? sender, StoppedEventArgs e)
     {
         _capture?.Dispose();
         _capture = null;
 
-        // A clean Stop() call nulls this out first, so e.Exception is the
-        // only way to tell "stopped because Stop() was called" apart from
-        // "the capture stream died on its own" (device change, driver hiccup,
-        // etc). The latter used to mean total silence forever after - nothing
-        // ever restarted the stream - which read as the whole rig freezing.
-        // Auto-restart so a transient hiccup recovers on its own instead.
-        if (e.Exception is not null)
+        System.Diagnostics.Debug.WriteLine($"Audio capture stopped unexpectedly: {e.Exception}");
+        try
         {
-            System.Diagnostics.Debug.WriteLine($"Audio capture stopped unexpectedly: {e.Exception}");
-            try
-            {
-                Start();
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Audio capture restart failed: {ex}");
-            }
+            Start();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Audio capture restart failed: {ex}");
         }
     }
 
@@ -263,3 +344,6 @@ public sealed class AudioBufferEventArgs(float[] samples, int sampleRate) : Even
 
     public int SampleRate { get; } = sampleRate;
 }
+
+/// <summary>One entry in the audio-source dropdown - Id is an MMDevice.ID, or null for "auto".</summary>
+public sealed record AudioDeviceOption(string? Id, string Name);

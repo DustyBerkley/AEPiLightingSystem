@@ -24,9 +24,7 @@ C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\bin\Debug\net8.0-window
 C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\bin\Debug\net8.0-windows10.0.19041.0\WinRT.Runtime.dll
 C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows10.0.19041.0\AEPiLightingSystem.csproj.AssemblyReference.cache
 C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows10.0.19041.0\Controls\LaserPanelView.baml
-C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows10.0.19041.0\Controls\LedStripView.baml
 C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows10.0.19041.0\Controls\LaserPanelView.g.cs
-C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows10.0.19041.0\Controls\LedStripView.g.cs
 C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows10.0.19041.0\MainWindow.g.cs
 C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows10.0.19041.0\App.g.cs
 C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows10.0.19041.0\GeneratedInternalTypeHelper.g.cs
@@ -45,3 +43,6 @@ C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-window
 C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows10.0.19041.0\AEPiLightingSystem.pdb
 C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows10.0.19041.0\AEPiLightingSystem.genruntimeconfig.cache
 C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows10.0.19041.0\ref\AEPiLightingSystem.dll
+C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows10.0.19041.0\Controls\FaderBoxView.g.cs
+C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows10.0.19041.0\Controls\FaderBoxView.baml
+C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\obj\Debug\net8.0-windows10.0.19041.0\AEPiLightingSystem.sourcelink.json

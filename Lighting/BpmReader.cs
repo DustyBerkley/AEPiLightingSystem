@@ -32,10 +32,10 @@ public sealed class BpmReader
     // live mirror for visual tuning, rather than guessing blind.
     // Shrunk from the original 170x100 guess (then halved, then flattened),
     // keeping the same center (165, 75) fixed throughout.
-    internal static readonly Int32Rect Deck1Region = new(133, 52, 65, 26);
+    internal static readonly Int32Rect Deck1Region = new(136, 52, 65, 26);
     // Quartered from the original 170x100 guess, keeping the same center
     // (535, 75) fixed.
-    internal static readonly Int32Rect Deck2Region = new(469, 49, 65, 26);
+    internal static readonly Int32Rect Deck2Region = new(469, 52, 65, 26);
 
     private const int UpscaleFactor = 4;
     private const int RequiredConsecutiveMatches = 2;

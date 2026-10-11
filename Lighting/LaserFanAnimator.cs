@@ -21,7 +21,7 @@ namespace AEPiLightingSystem.Lighting;
 /// (intensity fading to 0) and coming back rolls a new one.
 ///
 /// Active state fades in/out smoothly, driven by the same
-/// arpeggio/melodic-passage detection that drives the LED strips.
+/// arpeggio/melodic-passage detection that drives the ceiling light bars.
 ///
 /// A single isolated, sustained chord (as opposed to a busy arpeggio/vocal
 /// line - see <see cref="Audio.ChordSustainDetector"/>) gets different
@@ -140,9 +140,20 @@ public sealed class LaserFanAnimator
         _waveHue = _random.NextDouble() * 360.0;
     }
 
+    /// <summary>
+    /// True while a light-group override (see MainWindow's Launchpad row-2
+    /// pads 1-4) is forcing the laser off - SetActive/SetChordMode/
+    /// TriggerChordHit are all ignored outright while set, regardless of
+    /// who's calling them (manual fader effect or automation).
+    /// </summary>
+    public bool IsSuppressed { get; private set; }
+
     /// <summary>Call whenever the thing this follows (currently: arpeggio/melodic-passage detection) changes state.</summary>
     public void SetActive(bool active)
     {
+        if (IsSuppressed)
+            return;
+
         // Only roll a new color on an actual off-to-on transition, not on
         // every call (SetActive(true) can be called repeatedly while
         // already active) - see class summary.
@@ -150,8 +161,37 @@ public sealed class LaserFanAnimator
             _waveHue = _random.NextDouble() * 360.0;
         _wasActive = active;
 
+        // Set immediately, not once the fade below finishes - see
+        // LaserFixture.IsWaveEffectActive.
+        _laser.IsWaveEffectActive = active;
+
         _targetIntensity = active ? 1.0 : 0.0;
         EnsureRunning();
+    }
+
+    /// <summary>Force the laser off (true) or let it respond to SetActive/chord calls again (false).</summary>
+    public void SetSuppressed(bool suppressed)
+    {
+        IsSuppressed = suppressed;
+        if (!suppressed)
+            return;
+
+        _wasActive = false;
+        _chordMode = false;
+        _targetIntensity = 0.0;
+        _currentIntensity = 0.0;
+        _displayColor = Colors.Black;
+        _laser.IsWaveEffectActive = false;
+
+        foreach (var group in _laser.Groups)
+            group.Color = Colors.Black;
+        _laser.RaiseGroupsChanged();
+
+        if (_isRunning)
+        {
+            CompositionTarget.Rendering -= OnRendering;
+            _isRunning = false;
+        }
     }
 
     /// <summary>
@@ -162,7 +202,13 @@ public sealed class LaserFanAnimator
     /// the music itself has already moved from one held chord back to a
     /// busy arpeggio/vocal line.
     /// </summary>
-    public void SetChordMode(bool active) => _chordMode = active;
+    public void SetChordMode(bool active)
+    {
+        if (IsSuppressed)
+            return;
+
+        _chordMode = active;
+    }
 
     /// <summary>
     /// Call on every new chord attack while in chord mode: picks a fresh
@@ -170,6 +216,9 @@ public sealed class LaserFanAnimator
     /// </summary>
     public void TriggerChordHit()
     {
+        if (IsSuppressed)
+            return;
+
         _chordMode = true;
         _chordCenter = (_random.NextDouble() * 2.0 - 1.0) * CenterWanderRange;
         _chordHue = _random.NextDouble() * 360.0;

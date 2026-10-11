@@ -10,11 +10,11 @@ none
 false
 TRACE;DEBUG;NET;NET8_0;NETCOREAPP
 C:\Users\dusty\Dropbox\programs\csexe\AEPiLightingSystem\App.xaml
-3-1506013544
+31031960738
 
-49178581151
+61-1845694773
 219-429396539
-Controls\LaserPanelView.xaml;Controls\LedStripView.xaml;MainWindow.xaml;
+Controls\FaderBoxView.xaml;Controls\LaserPanelView.xaml;MainWindow.xaml;
 
 False
 

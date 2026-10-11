@@ -123,6 +123,18 @@ public sealed class LaserDmxBinder
     private const byte ChordScalingValue = 125;
     private const byte ChordRotationValue = 123;
 
+    // The 2nd manual laser fader effect's own confirmed ranges for
+    // Rotation/Horizontal Movement/Vertical Zoom - deliberately separate
+    // from the wave/lava-lamp effect's own RotationMin/Max and
+    // HorizontalMoveHalfRange above, and from Vertical Zoom's usual static
+    // 0 - see LaserFixture.IsSecondEffectActive.
+    private const double SecondEffectRotationMin = 15.0;
+    private const double SecondEffectRotationMax = 47.0;
+    private const double SecondEffectHorizontalMin = 57.0;
+    private const double SecondEffectHorizontalMax = 91.0;
+    private const double SecondEffectVerticalZoomMin = 0.0;
+    private const double SecondEffectVerticalZoomMax = 60.0;
+
     // CONFIRMED chord-mode ranges for Horizontal/Vertical Movement - a
     // fresh value is picked from each range once per chord hit (see
     // LaserFixture.ChordHitIndex), independent of the wave animation's own
@@ -188,7 +200,10 @@ public sealed class LaserDmxBinder
     {
         _universe.SetChannel(block + GallerySelectionOffset, LineGalleryValue);
         _universe.SetChannel(block + PatternSelectionOffset, HorizontalLinePatternIndex);
-        _universe.SetChannel(block + VerticalZoomOffset, 0);
+        // Vertical Zoom is NOT initialized here even though it's usually 0 -
+        // the 2nd manual laser effect animates it, so it's written every
+        // ApplyAll() call instead (see below), the same as every other
+        // channel that isn't always static.
         _universe.SetChannel(block + ForceTintingOffset, 0);
         _universe.SetChannel(block + NodeHighlightingOffset, 0);
         _universe.SetChannel(block + NodeExpansionOffset, 0);
@@ -207,9 +222,28 @@ public sealed class LaserDmxBinder
 
         var group = _laser.Groups[0];
 
-        byte scaling, rotation, horizontalShift, verticalMovement;
+        // Scaling wanders the same "default" way regardless of mode (chord
+        // mode's own fixed baseline aside, applied below) - shared by both
+        // the normal wave path and the 2nd manual laser effect, which
+        // doesn't touch this channel.
+        var scalingNoise01 = _scalingNoise.Sample(0.0, _time * EvolveSpeed);
+        var scalingValue = ScalingMin + scalingNoise01 * (ScalingMax - ScalingMin);
+        var scaling = (byte)Math.Round(Math.Clamp(scalingValue, 0.0, 127.0));
+
+        byte rotation, horizontalShift, verticalMovement, verticalZoom, colorMacro;
+        bool isOn;
+
         if (_laser.IsChordMode)
         {
+            // Chord mode is driven by the automated system, not the manual
+            // laser faders, and keeps its own original on/off and color
+            // rule (whether TriggerChordHit has actually painted a color
+            // into the group) rather than the manual-fader composition
+            // below - it can be active independently of
+            // LaserFixture.IsWaveEffectActive.
+            isOn = group.Color.R > 0 || group.Color.G > 0 || group.Color.B > 0;
+            colorMacro = NearestColorMacro(group.HueDegrees);
+
             // Chord mode: fixed confirmed-good baseline, not wandered -
             // see class summary. Horizontal/Vertical Movement get a fresh
             // random value once per chord hit rather than every tick.
@@ -225,12 +259,54 @@ public sealed class LaserDmxBinder
 
             horizontalShift = _chordHorizontalValue;
             verticalMovement = _chordVerticalValue;
+            verticalZoom = 0;
+        }
+        else if (_laser.IsSecondEffectActive)
+        {
+            // The wave effect (1st laser fader) and the 2nd manual laser
+            // effect are independent - either can be on with the other off,
+            // and both being on at once composes rather than one
+            // suppressing the other: whichever one wants the fixture on
+            // wins that vote, and color prefers the wave effect's own hue
+            // whenever it's actually contributing, falling back to the 2nd
+            // effect's own hue only when the wave effect isn't lit (so the
+            // 2nd effect still reads correctly used entirely on its own).
+            // IsWaveEffectActive flips the instant the fader wants it off,
+            // not once its own cosmetic fade finishes - see
+            // LaserFixture.IsWaveEffectActive.
+            //
+            // Rotation/Horizontal Movement/Vertical Zoom get their own
+            // independently-wandered values (see LaserSecondEffectAnimator)
+            // within their own confirmed ranges - a physical DMX channel
+            // can only carry one value at a time, so this effect takes
+            // priority over the wave effect's own formulas for just these
+            // 3 channels while it's active. Everything else (Scaling above,
+            // Horizontal Zoom below) keeps composing with the wave effect
+            // normally.
+            isOn = true;
+            colorMacro = _laser.IsWaveEffectActive
+                ? NearestColorMacro(group.HueDegrees)
+                : NearestColorMacro(_laser.SecondEffectHueDegrees);
+
+            var rotationValue = SecondEffectRotationMin + _laser.SecondEffectRotationFraction * (SecondEffectRotationMax - SecondEffectRotationMin);
+            rotation = (byte)Math.Round(Math.Clamp(rotationValue, 0.0, 127.0));
+
+            var horizontalValue = SecondEffectHorizontalMin + _laser.SecondEffectHorizontalFraction * (SecondEffectHorizontalMax - SecondEffectHorizontalMin);
+            horizontalShift = (byte)Math.Round(Math.Clamp(horizontalValue, 0.0, 127.0));
+
+            var verticalZoomValue = SecondEffectVerticalZoomMin + _laser.SecondEffectVerticalZoomFraction * (SecondEffectVerticalZoomMax - SecondEffectVerticalZoomMin);
+            verticalZoom = (byte)Math.Round(Math.Clamp(verticalZoomValue, 0.0, 127.0));
+
+            verticalMovement = 0;
         }
         else
         {
-            var scalingNoise01 = _scalingNoise.Sample(0.0, _time * EvolveSpeed);
-            var scalingValue = ScalingMin + scalingNoise01 * (ScalingMax - ScalingMin);
-            scaling = (byte)Math.Round(Math.Clamp(scalingValue, 0.0, 127.0));
+            // Neither chord mode nor the 2nd manual laser effect - plain
+            // wave path (or fully off, if the wave effect isn't active
+            // either). IsWaveEffectActive flips the instant the fader/
+            // automation wants it off - see LaserFixture.IsWaveEffectActive.
+            isOn = _laser.IsWaveEffectActive;
+            colorMacro = NearestColorMacro(group.HueDegrees);
 
             var rotationNoise01 = _rotationNoise.Sample(0.0, _time * RotationEvolveSpeed);
             var rotationValue = RotationMin + rotationNoise01 * (RotationMax - RotationMin);
@@ -239,14 +315,11 @@ public sealed class LaserDmxBinder
             var horizontalShiftValue = CenteredStaticValue + group.CenterFraction * HorizontalMoveHalfRange;
             horizontalShift = (byte)Math.Clamp(horizontalShiftValue, 0.0, 127.0);
             verticalMovement = 0;
+            verticalZoom = 0;
         }
-
-        var isOn = group.Color.R > 0 || group.Color.G > 0 || group.Color.B > 0;
 
         var zoom = Math.Clamp(group.WidthFraction, 0.0, 1.0) * HorizontalZoomMax;
         zoom = Math.Clamp(zoom, 0.0, HorizontalZoomMax);
-
-        var colorMacro = NearestColorMacro(group.HueDegrees);
 
         for (var i = 0; i < LaserFixture.GroupCount; i++)
         {
@@ -255,6 +328,7 @@ public sealed class LaserDmxBinder
             _universe.SetChannel(block + HorizontalMovementOffset, horizontalShift);
             _universe.SetChannel(block + VerticalMovementOffset, verticalMovement);
             _universe.SetChannel(block + HorizontalZoomOffset, (byte)zoom);
+            _universe.SetChannel(block + VerticalZoomOffset, verticalZoom);
             _universe.SetChannel(block + ColorChangeOffset, colorMacro);
             _universe.SetChannel(block + ScalingOffset, scaling);
             _universe.SetChannel(block + RotationOffset, rotation);

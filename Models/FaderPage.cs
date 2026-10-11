@@ -5,6 +5,13 @@ public enum FaderPage
 {
     Bass,
     Laser,
-    LedStrip,
+    LightBar,
     Combo,
+
+    /// <summary>
+    /// Global fixture-wide controls (see MainWindow.UpdateGlobalBrightnessFaderEffect)
+    /// - not a real physical page selectable from the on-screen GUI, only
+    /// from the Launchpad's row-1 pad 4.
+    /// </summary>
+    Global,
 }

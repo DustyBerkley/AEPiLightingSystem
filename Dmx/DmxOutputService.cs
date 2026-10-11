@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -28,6 +30,10 @@ namespace AEPiLightingSystem.Dmx;
 /// latency timer be set low in software (no registry/admin access needed)
 /// - both close the gap with how dedicated lighting software drives this
 /// same class of adapter.
+///
+/// Devices are opened by their index in D2XX's own enumeration rather than
+/// by serial number, since these widgets frequently have no serial number
+/// programmed at all - see <see cref="EnumerateDevices"/>.
 /// </summary>
 public sealed class DmxOutputService : IDisposable
 {
@@ -38,7 +44,6 @@ public sealed class DmxOutputService : IDisposable
     private const ushort FlowControlNone = 0;
     private const uint PurgeRxAndTx = 3; // FT_PURGE_RX (1) | FT_PURGE_TX (2)
     private const byte LatencyTimerMs = 1;
-    private const uint OpenBySerialNumber = 1;
 
     // A break only needs to hold the line low for >=88us and the
     // mark-after-break only needs to be >=12us - a millisecond of slack on
@@ -63,7 +68,7 @@ public sealed class DmxOutputService : IDisposable
 
     private readonly DmxUniverse _universe;
     private IntPtr _handle = IntPtr.Zero;
-    private string? _connectedSerialNumber;
+    private string? _connectedDeviceName;
     private Thread? _senderThread;
     private volatile bool _running;
 
@@ -76,32 +81,71 @@ public sealed class DmxOutputService : IDisposable
         _universe = universe;
     }
 
-    /// <summary>The FTDI serial number of every Open DMX USB-class device currently plugged in.</summary>
-    public static string[] GetAvailablePorts()
+    /// <summary>A display/identification name for every Open DMX USB-class device currently plugged in.</summary>
+    public static string[] GetAvailablePorts() =>
+        EnumerateDevices().Select(device => device.DisplayName).ToArray();
+
+    /// <summary>
+    /// Enumerates the FTDI devices currently attached, naming each one and
+    /// noting whether D2XX already considers it open.
+    ///
+    /// The serial number can't be relied on as the identifier: D2XX blanks
+    /// out both the serial and the description for any device that's
+    /// already open, and some widgets have no serial programmed at all.
+    /// Either way that left the dropdown showing an empty entry and
+    /// FT_OpenEx "by serial number" failing against an empty string. Fall
+    /// back to the description, then to a synthetic per-index label, so
+    /// there's always something non-empty to show and to match against -
+    /// the actual open goes by list index (see <see cref="Connect"/>),
+    /// never by this string.
+    /// </summary>
+    private static List<DeviceInfo> EnumerateDevices()
     {
         var status = FT_CreateDeviceInfoList(out var count);
         if (status != FtOk || count == 0)
-            return Array.Empty<string>();
+            return new List<DeviceInfo>();
 
         var nodes = new FT_DEVICE_LIST_INFO_NODE[count];
         status = FT_GetDeviceInfoList(nodes, ref count);
         if (status != FtOk)
-            return Array.Empty<string>();
+            return new List<DeviceInfo>();
 
-        var serials = new string[count];
+        var devices = new List<DeviceInfo>((int)count);
         for (var i = 0; i < count; i++)
-            serials[i] = ReadFixedAnsiString(nodes[i].SerialNumber);
+        {
+            var serial = ReadFixedAnsiString(nodes[i].SerialNumber);
+            var description = ReadFixedAnsiString(nodes[i].Description);
 
-        return serials;
+            var displayName = serial.Length > 0 ? serial
+                : description.Length > 0 ? description
+                : $"FTDI device {i}";
+
+            devices.Add(new DeviceInfo(displayName, (nodes[i].Flags & FtFlagsOpened) != 0));
+        }
+
+        return devices;
     }
 
-    public void Connect(string serialNumber)
+    private readonly record struct DeviceInfo(string DisplayName, bool IsAlreadyOpen);
+
+    public void Connect(string deviceName)
     {
         Disconnect();
 
-        var status = FT_OpenEx(serialNumber, OpenBySerialNumber, out var handle);
+        // Resolved fresh here rather than trusting an index captured when
+        // the dropdown was populated - the list can change underneath us if
+        // something is plugged in or pulled out in between.
+        var devices = EnumerateDevices();
+        var index = devices.FindIndex(device => device.DisplayName == deviceName);
+        if (index < 0)
+            throw new InvalidOperationException($"Device '{deviceName}' is not plugged in.");
+
+        if (devices[index].IsAlreadyOpen)
+            throw new InvalidOperationException("DMX adapter is already open - unplug it and plug it back in.");
+
+        var status = FT_Open(index, out var handle);
         if (status != FtOk)
-            throw new InvalidOperationException($"FT_OpenEx failed ({status}) for device '{serialNumber}'.");
+            throw new InvalidOperationException($"FT_Open failed ({status}) for device '{deviceName}'.");
 
         try
         {
@@ -118,7 +162,7 @@ public sealed class DmxOutputService : IDisposable
         }
 
         _handle = handle;
-        _connectedSerialNumber = serialNumber;
+        _connectedDeviceName = deviceName;
         _running = true;
 
         _senderThread = new Thread(SenderLoop) { IsBackground = true, Name = "DMX Sender", Priority = ThreadPriority.Highest };
@@ -137,14 +181,14 @@ public sealed class DmxOutputService : IDisposable
             _handle = IntPtr.Zero;
         }
 
-        _connectedSerialNumber = null;
+        _connectedDeviceName = null;
     }
 
     private void SenderLoop()
     {
         var handle = _handle;
-        var serialNumber = _connectedSerialNumber;
-        if (handle == IntPtr.Zero || serialNumber is null)
+        var deviceName = _connectedDeviceName;
+        if (handle == IntPtr.Zero || deviceName is null)
             return;
 
         var consecutiveFailures = 0;
@@ -162,10 +206,10 @@ public sealed class DmxOutputService : IDisposable
             if ((now - lastDevicePresenceCheck).TotalMilliseconds >= DevicePresenceCheckIntervalMs)
             {
                 lastDevicePresenceCheck = now;
-                if (Array.IndexOf(GetAvailablePorts(), serialNumber) < 0)
+                if (Array.IndexOf(GetAvailablePorts(), deviceName) < 0)
                 {
                     _running = false;
-                    ConnectionLost?.Invoke(this, new InvalidOperationException($"Device '{serialNumber}' is no longer present."));
+                    ConnectionLost?.Invoke(this, new InvalidOperationException($"Device '{deviceName}' is no longer present."));
                     return;
                 }
             }
@@ -232,6 +276,13 @@ public sealed class DmxOutputService : IDisposable
 
     private const int FtOk = 0;
 
+    // FT_FLAGS_OPENED - D2XX already has this device open, either in another
+    // process or left stranded by one that died without closing its handle
+    // (force-killing this app mid-run does exactly that). The device keeps
+    // enumerating normally in that state, just with its serial/description
+    // blanked and every open attempt returning FT_DEVICE_NOT_OPENED.
+    private const uint FtFlagsOpened = 1;
+
     [StructLayout(LayoutKind.Sequential)]
     private struct FT_DEVICE_LIST_INFO_NODE
     {
@@ -250,8 +301,8 @@ public sealed class DmxOutputService : IDisposable
     [DllImport("ftd2xx.dll")]
     private static extern int FT_GetDeviceInfoList([In, Out] FT_DEVICE_LIST_INFO_NODE[] deviceInfo, ref uint numDevs);
 
-    [DllImport("ftd2xx.dll", CharSet = CharSet.Ansi)]
-    private static extern int FT_OpenEx(string serialNumber, uint flags, out IntPtr ftHandle);
+    [DllImport("ftd2xx.dll")]
+    private static extern int FT_Open(int deviceNumber, out IntPtr ftHandle);
 
     [DllImport("ftd2xx.dll")]
     private static extern int FT_Close(IntPtr ftHandle);
